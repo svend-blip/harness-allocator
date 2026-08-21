@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "harness-allocator"
+version = "0.3.0"
+description = "A standalone, harness-neutral allocator for coding harnesses (DeepSeek Harness, Codex, and other one-shot/resident clients)."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.setuptools.packages.find]
+include = ["harness_allocator*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
