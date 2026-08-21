@@ -5,7 +5,11 @@ role to a harness key, builds the invocation, runs one-shot turns with an
 argv-style task transport, and reports status — **independent of DPMtF**
 flows, verdicts, roles, governance, dispatch, and the bridge database.
 
-This is an **optional companion project** to DPMtF-WebUI. DPMtF keeps its own
+This is an **optional companion project** to DPMtF-WebUI (DPMtF —
+Deterministic Process Management to Finalisation: a deterministic
+multi-agent process orchestration framework for taking defined work from
+intent to verified finalisation through governed flows, steps, roles,
+harnesses, models, gates, and artifacts). DPMtF keeps its own
 dispatch, database, roles, verdicts and governance; it only ever needs to ask
 this package for behaviour, not for command strings.
 
