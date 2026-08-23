@@ -38,6 +38,9 @@ from .definition import model_target_identity, resolve_harness, resolve_role_key
 from .status import CANCELLED, ERROR, RUNNING, SUCCESS
 from .transport import compute_identity, make_request_id
 
+from .capabilities import LargeInputRefusedError
+from .runspec import HarnessRunResult, RunEvidence, RunTiming, RunUsage
+
 #: Time between heartbeat emissions while a harness subprocess stays alive.
 DEFAULT_HEARTBEAT_INTERVAL = 15.0
 
@@ -326,4 +329,110 @@ def run_command(command, *, cwd, timeout=None, heartbeat_interval=15.0,
         cancel_event=cancel_event,
         cancel_callback=cancel_callback,
         cancel_grace_seconds=cancel_grace_seconds,
+    )
+
+
+
+def execute_spec(spec, cfg=None):
+    """Run ``spec`` through ``execute``'s existing adapter path and return a
+    :class:`HarnessRunResult`.
+
+    This is the RunSpec-based entry ALONGSIDE the frozen ``execute`` facade
+    (GOAL.md Run 020 §1 D3). ``execute``'s signature and emitted argv are
+    byte-identical to pristine master ``c202286`` — this function is
+    ADDITIVE only.
+
+    Behavior (BOUND):
+
+    1. ``spec.validate()`` runs first. The three D1 typed errors propagate
+       (UnknownHarnessError, MissingPromptError, UnsupportedCapabilityError).
+       All three are raised BEFORE any subprocess — the typed refusal
+       contract (TG7 / D4).
+
+    2. The one-shot argv is built via the EXISTING adapter path
+       ``build_task_argv(spec.harness, model_target=spec.model_reference,
+       task=spec.prompt, cfg=cfg)``. ``build_task_argv`` raises ``ValueError``
+       ("no one-shot task invocation for harness '...'") for the resident
+       TUIs (``codex`` / ``claude-code`` / ``opencode``); that ValueError
+       is caught and re-raised as ``LargeInputRefusedError`` (naming the
+       harness) — the typed non-interactive / large-paste refusal. It too
+       MUST happen BEFORE any subprocess.
+
+    3. The argv is run via the EXISTING ``run_argv`` path. There is NO
+       tempfile / stdin mechanism in the package — large input routes
+       through the single-argv-element delivery that ``build_task_argv``
+       produces.
+
+    4. A :class:`HarnessRunResult` is filled and returned:
+       ``status = proc["status"]``; ``exit_code = 0`` on SUCCESS, ``None``
+       otherwise (BOUND — ``run_argv`` does not expose the child return
+       code, so we MUST NOT fabricate a nonzero value); ``stdout`` /
+       ``stderr`` map from ``proc["output"]`` / ``proc["error"]``;
+       ``request_id`` is ``spec.request_id`` if set else a fresh
+       ``make_request_id()``; ``session_id`` is the spec's session id or
+       ``None`` (the one-shot path exposes none); ``artifacts`` is the
+       spec's expected_artifacts list; ``evidence`` and ``usage`` are
+       fresh empty / None instances (the one-shot path tracks nothing —
+       "nulls where a harness exposes nothing"); ``timing.started_at`` /
+       ``timing.finished_at`` are float POSIX seconds captured via
+       :func:`time.time` around the ``run_argv`` call.
+
+    Stdlib only — no new third-party imports.
+    """
+    # (1) Validate first; typed errors propagate BEFORE any subprocess.
+    spec.validate()
+
+    harness_key = (spec.harness or "").strip()
+
+    # (2) Build the one-shot argv via the EXISTING adapter path. Resident
+    #     TUIs (codex/claude-code/opencode) raise ValueError from
+    #     build_task_argv; we catch and re-raise as LargeInputRefusedError
+    #     (the typed non-interactive / large-paste refusal — TG7 / D4).
+    try:
+        argv = build_task_argv(
+            harness_key,
+            model_target=spec.model_reference,
+            task=spec.prompt,
+            cfg=cfg,
+        )
+    except ValueError as exc:
+        # Resident TUIs have no one-shot form; refuse with the typed error.
+        if "no one-shot task invocation" in str(exc):
+            raise LargeInputRefusedError(
+                f"harness {harness_key!r} has no non-interactive one-shot "
+                f"form; large-paste input is refused for resident TUIs "
+                f"({exc})"
+            ) from exc
+        raise
+
+    # (3) Run it via the existing run_argv path. capture wall-clock time
+    #     around the call for timing.started_at/finished_at.
+    cwd = spec.working_directory or os.getcwd()
+    started_at = _time.time()
+    proc = run_argv(
+        argv,
+        cwd=cwd,
+        timeout=spec.timeout,
+    )
+    finished_at = _time.time()
+
+    # (4) Fill and return HarnessRunResult with the BOUND exit_code
+    #     semantics: 0 on SUCCESS, None otherwise. run_argv does not
+    #     expose the child return code, so we MUST NOT fabricate a real
+    #     nonzero value.
+    status = proc.get("status", ERROR)
+    exit_code = 0 if status == SUCCESS else None
+
+    return HarnessRunResult(
+        request_id=(spec.request_id or "").strip() or make_request_id(),
+        harness=harness_key,
+        status=status,
+        exit_code=exit_code,
+        session_id=(spec.session.session_id or "").strip() or None,
+        stdout=proc.get("output", ""),
+        stderr=proc.get("error", ""),
+        artifacts=list(spec.output.expected_artifacts),
+        evidence=RunEvidence(),
+        usage=RunUsage(),
+        timing=RunTiming(started_at=started_at, finished_at=finished_at),
     )
