@@ -47,6 +47,8 @@ def build_launch_command(harness, model_target=None, task=None, cfg=None) -> str
         return _codex_command(model_target, cfg)
     if harness == "dsh":
         return build_dsh_invocation(model_target, task, cfg)
+    if harness == "qwen":
+        return build_qwen_invocation(model_target, task, cfg)
     raise ValueError(f"not a native harness: {harness!r}")
 
 
@@ -58,6 +60,8 @@ def build_launch_argv(harness, model_target=None, task=None, cfg=None) -> list:
         return _codex_argv(model_target, cfg)
     if harness == "dsh":
         return build_dsh_argv(model_target, task, cfg)
+    if harness == "qwen":
+        return build_qwen_argv(model_target, task, cfg)
     raise ValueError(f"not a native harness: {harness!r}")
 
 
@@ -106,6 +110,8 @@ def build_task_invocation(harness, model_target=None, task=None, cfg=None) -> st
     """
     if harness == "dsh":
         return build_dsh_invocation(model_target, task, cfg)
+    if harness == "qwen":
+        return build_qwen_invocation(model_target, task, cfg)
     raise ValueError(f"no one-shot task invocation for harness {harness!r}")
 
 
@@ -119,7 +125,100 @@ def build_task_argv(harness, model_target=None, task=None, cfg=None) -> list:
     """
     if harness == "dsh":
         return build_dsh_argv(model_target, task, cfg)
+    if harness == "qwen":
+        return build_qwen_argv(model_target, task, cfg)
     raise ValueError(f"no one-shot task invocation for harness {harness!r}")
+
+
+def build_qwen_invocation(model_target=None, task=None, cfg=None) -> str:
+    """The one-shot Qwen Code invocation as a shell command string.
+
+    ``[<qwen_bin>, --approval-mode, <mode>, --include-directories <dir>*, -p, <task>]``.
+    Model and endpoint NEVER appear in argv — they travel in the child env
+    (see :func:`build_qwen_env`). ``task`` is appended as the final argument
+    when supplied; ``model_target`` is accepted for call-shape compatibility
+    and deliberately NOT used (the allocator never selects the model).
+    """
+    return _join_argv(build_qwen_argv(model_target, task, cfg))
+
+
+def build_qwen_argv(model_target=None, task=None, cfg=None) -> list:
+    """The one-shot Qwen Code invocation as an argv list.
+
+    ``[<qwen_bin>, --approval-mode, <mode>, --include-directories <dir>*, -p, <task>]``.
+    The complete ``task`` (any size, any embedded newlines) is one argv
+    element — no shlex round-trip, no shell interpolation. The model and
+    endpoint travel in the child env (:func:`build_qwen_env`), not in argv;
+    ``model_target`` is accepted for call-shape compatibility and deliberately
+    NOT used.
+
+    ``--include-directories <dir>`` is REPEATABLE — one flag per configured
+    dir, omitted entirely when none are configured. ``-p <task>`` is appended
+    only when a task is supplied (the launch form omits it).
+    """
+    if cfg is None:
+        cfg = config
+    parts = shlex.split(cfg.get_qwen_bin())
+    if not parts:
+        # Missing-binary refusal (D4 — Run 022 / HA-2): the resolved
+        # binary is empty/whitespace. Refuse with a typed ValueError
+        # naming the harness — no filesystem existence check, the
+        # adapter is a pure string/list builder (no I/O). The refusal
+        # surfaces BEFORE any subprocess (the execute layer will
+        # catch it via its `except Exception` clause).
+        raise ValueError(
+            "qwen binary is not configured "
+            "(empty QWEN_BIN / [qwen] bin)"
+        )
+    parts += ["--approval-mode", cfg.get_qwen_approval_mode()]
+    for d in cfg.get_qwen_add_dirs():
+        d = (d or "").strip()
+        if d:
+            parts += ["--include-directories", d]
+    if task:
+        parts += ["-p", task]
+    return parts
+
+
+def build_qwen_env(model_target=None, cfg=None) -> dict:
+    """The child-env override dict for a one-shot Qwen Code invocation.
+
+    Endpoint wiring is env-based, not flag-based. The dict carries:
+
+    - ``OPENAI_BASE_URL`` — the resolved base URL FORCED to end in ``/v1``
+      (appended when non-empty and not already ending in it). OMITTED when the
+      base URL is empty (Qwen Code's default endpoint).
+    - ``OPENAI_MODEL`` — the resolved model target VERBATIM. OMITTED when
+      empty.
+    - ``OPENAI_API_KEY`` — the VALUE read from the environment variable NAMED
+      by ``cfg.get_qwen_api_key_env()`` (the config value is a NAME, never a
+      secret). OMITTED when the name is empty or the named variable is unset
+      / empty.
+
+    Returns an empty dict when there is nothing to set (no base URL, no model,
+    no key) — the caller can then fall back to inheriting the parent env. This
+    builder never reads or returns a secret value of its own; the key is read
+    from the NAMED environment variable the config identifies.
+    """
+    if cfg is None:
+        cfg = config
+    env: dict = {}
+    base_url = (cfg.get_qwen_base_url() or "").strip()
+    if base_url:
+        if not base_url.endswith("/v1"):
+            base_url = base_url.rstrip("/") + "/v1"
+        env["OPENAI_BASE_URL"] = base_url
+    model = model_target_identity(model_target)
+    if model:
+        env["OPENAI_MODEL"] = model
+    name = (cfg.get_qwen_api_key_env() or "").strip()
+    if name:
+        import os
+        key = os.environ.get(name)
+        if key:
+            env["OPENAI_API_KEY"] = key
+    return env
+
 
 
 def _codex_command(model_target, cfg) -> str:

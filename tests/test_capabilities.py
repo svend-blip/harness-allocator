@@ -207,6 +207,15 @@ def test_manifests_do_not_share_mutable_state():
 # ── SUPPORTED_HARNESSES exposes the four contract keys ─────────────────
 
 
-def test_supported_harnesses_lists_the_four_contract_keys():
-    """SUPPORTED_HARNESSES exposes the four contract keys (no extras)."""
-    assert set(SUPPORTED_HARNESSES) == {"codex", "claude-code", "opencode", "dsh"}
+def test_supported_harnesses_lists_the_five_contract_keys():
+    """SUPPORTED_HARNESSES exposes the five contract keys (no extras).
+
+    The 084/085/086 sequence added ``qwen`` to the supported set
+    (GOAL.md Run 022 §1 D3 — SUPPORTED_HARNESSES five-key flip). The
+    four existing harnesses' parametrized lists elsewhere in this file
+    remain untouched (they test the four existing harnesses, not the
+    SUPPORTED_HARNESSES constant).
+    """
+    assert set(SUPPORTED_HARNESSES) == {
+        "codex", "claude-code", "opencode", "dsh", "qwen"
+    }

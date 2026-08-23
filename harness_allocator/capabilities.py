@@ -1,4 +1,4 @@
-"""Normalized capability manifest for the four existing harnesses.
+"""Normalized capability manifest for the five supported harnesses.
 
 The manifest is a dict with EXACTLY five groups (the ROADMAP §3 normalized
 shape MINUS its speculative ``models`` and ``workflow`` groups, which this run
@@ -45,7 +45,7 @@ capability refusal) can import them from here:
 
     UnknownHarnessError        — raised by ``get_capabilities`` for any harness
                                  key not in ('codex', 'claude-code', 'opencode',
-                                 'dsh'). USED IN THIS HANDOFF.
+                                 'dsh', 'qwen'). USED IN THIS HANDOFF.
     MissingPromptError         — reserved for RunSpec validation (handoff 2).
     UnsupportedCapabilityError — reserved for execute_spec capability refusal
                                  (handoff 3).
@@ -215,12 +215,51 @@ _MANIFEST_DSH = {
     },
 }
 
+# qwen — headless one-shot invoked by adapter.build_qwen_argv
+# ([qwen, --approval-mode, <mode>, --include-directories <dir>*, -p, <task>]);
+# model/endpoint live in the child env (adapter.build_qwen_env), not argv;
+# measured cancel path (SIGINT → SIGTERM → SIGKILL) in invoke.run_argv.
+# Grounded in the installed qwen CLI 0.22.0 (`qwen --help`) and the headless
+# one-shot shape of the dsh manifest: qwen -p is a headless single-shot
+# invocation (Qwen Code's own help: "use -p/--prompt for non-interactive
+# mode"); sessions resume (-c/--continue, -r/--resume) is supported in the
+# CLI but NOT in -p mode (one-shot here); qwen has both `qwen mcp`
+# (extensions.mcp) and /skills in interactive mode (extensions.skills);
+# automation.deterministic_exit is the bound D1 fact for -p; automation.
+# interrupt_safe mirrors dsh — invoke.run_argv's measured cancel path.
+_MANIFEST_QWEN = {
+    "execution": {
+        "terminal": False,
+        "headless": True,
+        "interactive": False,
+    },
+    "workspace": {
+        "read_only": False,
+        "workspace_write": True,
+        "full_access": False,
+    },
+    "sessions": {
+        "persistent_session": False,
+        "session_resume": True,
+        "mode": "oneshot",
+    },
+    "extensions": {
+        "skills": True,
+        "mcp": True,
+        "custom_tools": False,
+    },
+    "automation": {
+        "non_interactive": True,
+        "deterministic_exit": True,
+        "interrupt_safe": True,
+    },
+}
 
 # ── Public API ─────────────────────────────────────────────────────────
 
 
 #: The set of harness keys that ``get_capabilities`` accepts.
-SUPPORTED_HARNESSES = ("codex", "claude-code", "opencode", "dsh")
+SUPPORTED_HARNESSES = ("codex", "claude-code", "opencode", "dsh", "qwen")
 
 
 def get_capabilities(harness) -> dict:
@@ -266,5 +305,13 @@ def get_capabilities(harness) -> dict:
             "sessions": dict(_MANIFEST_DSH["sessions"]),
             "extensions": dict(_MANIFEST_DSH["extensions"]),
             "automation": dict(_MANIFEST_DSH["automation"]),
+        }
+    if harness == "qwen":
+        return {
+            "execution": dict(_MANIFEST_QWEN["execution"]),
+            "workspace": dict(_MANIFEST_QWEN["workspace"]),
+            "sessions": dict(_MANIFEST_QWEN["sessions"]),
+            "extensions": dict(_MANIFEST_QWEN["extensions"]),
+            "automation": dict(_MANIFEST_QWEN["automation"]),
         }
     raise UnknownHarnessError(f"unknown harness: {harness!r}")

@@ -33,7 +33,7 @@ import subprocess
 import threading
 import time as _time
 
-from .adapter import build_task_argv
+from .adapter import build_qwen_env, build_task_argv
 from .definition import model_target_identity, resolve_harness, resolve_role_key
 from .status import CANCELLED, ERROR, RUNNING, SUCCESS
 from .transport import compute_identity, make_request_id
@@ -135,6 +135,16 @@ def execute(role="", harness=None, model_target="", cwd=None, task="", cfg=None,
 
     try:
         argv = build_task_argv(harness_key, model_target=model_target, task=task, cfg=cfg)
+        # Endpoint wiring (D3 — Run 022 / HA-2): the qwen child env is
+        # {**parent_env, **build_qwen_env(...)} so the binary stays
+        # resolvable via PATH. When build_qwen_env returns an empty
+        # dict, pass env=None (inherit) so the four existing harnesses
+        # and the default qwen config stay byte-identical.
+        if harness_key == "qwen":
+            qwen_env = build_qwen_env(model_target=model_target, cfg=cfg)
+            env = {**os.environ, **qwen_env} if qwen_env else None
+        else:
+            env = None
         proc_result = run_argv(
             argv,
             cwd=cwd or os.getcwd(),
@@ -145,6 +155,7 @@ def execute(role="", harness=None, model_target="", cwd=None, task="", cfg=None,
             cancel_event=cancel_event,
             cancel_callback=cancel_callback,
             cancel_grace_seconds=cancel_grace_seconds,
+            env=env,
         )
         return {**base, **proc_result}
     except Exception as exc:  # noqa: BLE001 — the contract reports, never raises
@@ -162,7 +173,8 @@ def execute(role="", harness=None, model_target="", cwd=None, task="", cfg=None,
 def run_argv(argv, *, cwd, timeout=None, heartbeat_interval=15.0,
              on_event=None, event_context=None, cancel_event=None,
              cancel_callback=None,
-             cancel_grace_seconds=CANCEL_GRACE_SECONDS) -> dict:
+             cancel_grace_seconds=CANCEL_GRACE_SECONDS,
+             env=None) -> dict:
     """Spawn ``argv`` and return ``{status, output, error, elapsed, pid}``.
 
     The argv list is passed directly to :class:`subprocess.Popen` — no shell,
@@ -192,6 +204,8 @@ def run_argv(argv, *, cwd, timeout=None, heartbeat_interval=15.0,
         "text": True,
         "cwd": cwd,
     }
+    if env is not None:
+        popen_kwargs["env"] = env
     if os.name == "posix":
         popen_kwargs.update({
             "start_new_session": True,
@@ -406,13 +420,23 @@ def execute_spec(spec, cfg=None):
         raise
 
     # (3) Run it via the existing run_argv path. capture wall-clock time
-    #     around the call for timing.started_at/finished_at.
+    #     around the call for timing.started_at/finished_at. The qwen
+    #     child env threads {**parent_env, **build_qwen_env(...)} so the
+    #     binary stays resolvable via PATH; non-qwen specs pass env=None
+    #     (inherit) and stay byte-identical to the existing four-harness
+    #     facade (D3 — Run 022 / HA-2).
     cwd = spec.working_directory or os.getcwd()
+    if harness_key == "qwen":
+        qwen_env = build_qwen_env(model_target=spec.model_reference, cfg=cfg)
+        env = {**os.environ, **qwen_env} if qwen_env else None
+    else:
+        env = None
     started_at = _time.time()
     proc = run_argv(
         argv,
         cwd=cwd,
         timeout=spec.timeout,
+        env=env,
     )
     finished_at = _time.time()
 

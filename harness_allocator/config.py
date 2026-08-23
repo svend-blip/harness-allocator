@@ -159,6 +159,108 @@ def get_dsh_patch_path() -> str:
     return configured or ""
 
 
+
+# ── Qwen Code adapter config (Run 022 / HA-2) ───────────────────────────
+#
+# Qwen Code's endpoint wiring is env-based, not flag-based: model and
+# endpoint travel ONLY in the child env (see adapter.build_qwen_env), so
+# config here exposes NAMES (bin, base_url, api_key_env, ...) — never
+# secrets. Defaults mirror the existing per-harness pattern: every value
+# has a documented default and an env override, no hardcoded host-absolute paths
+# anywhere.
+
+
+def get_qwen_bin() -> str:
+    """Qwen Code launcher. Env ``QWEN_BIN``, ini ``[qwen] bin``, or ``qwen``.
+
+    The default is the on-PATH ``qwen`` binary (verified installed
+    host-side before the run opened). Like the other harnesses, callers
+    can override with a full launcher path via env or ini.
+    """
+    env = os.environ.get("QWEN_BIN")
+    if env:
+        return env
+    configured = _ini("qwen", "bin")
+    return configured or "qwen"
+
+
+def get_qwen_base_url() -> str:
+    """Qwen Code endpoint base URL. Env ``QWEN_BASE_URL``, ini ``[qwen] base_url``, or empty.
+
+    Empty (default) means Qwen Code's own endpoint — the allocator
+    deliberately does NOT hardcode an endpoint. When non-empty, the adapter
+    forces the value to end in ``/v1`` so it works with any OpenAI-compatible
+    server (the opencode lesson — local endpoints need the ``/v1`` path).
+    """
+    env = os.environ.get("QWEN_BASE_URL")
+    if env:
+        return env
+    configured = _ini("qwen", "base_url")
+    return configured or ""
+
+
+def get_qwen_api_key_env() -> str:
+    """Name of the environment variable that holds the Qwen Code API key. Env ``QWEN_API_KEY_ENV``, ini ``[qwen] api_key_env``, or empty.
+
+    The config value is a NAME — never the secret itself. The adapter reads
+    the named variable from the environment when building the child env
+    (see ``adapter.build_qwen_env``). Empty means "no key wired": the child
+    env simply omits ``OPENAI_API_KEY`` and the runtime inherits the parent
+    shell. This indirection lets callers route the key through whatever env
+    var they already populate (e.g. ``QWEN_API_KEY``, ``OPENAI_API_KEY``).
+    """
+    env = os.environ.get("QWEN_API_KEY_ENV")
+    if env:
+        return env
+    configured = _ini("qwen", "api_key_env")
+    return configured or ""
+
+
+def get_qwen_workdir() -> str:
+    """Qwen Code working root. Env ``QWEN_WORKDIR``, ini ``[qwen] workdir``, or empty.
+
+    Empty (default) means "use the caller's working directory" — Qwen Code
+    has no explicit workdir flag, so this is reserved for callers who want to
+    anchor the run via a documented knob.
+    """
+    env = os.environ.get("QWEN_WORKDIR")
+    if env:
+        return env
+    configured = _ini("qwen", "workdir")
+    return configured or ""
+
+
+def get_qwen_add_dirs() -> list:
+    """Qwen Code ``--include-directories`` paths. Env ``QWEN_ADD_DIRS`` (colon/comma-separated), ini ``[qwen] add_dirs``, or empty.
+
+    Empty (default) means the flag is omitted entirely — Qwen Code inherits
+    its native behaviour. Callers populate this when they want the headless
+    run to have read access to project directories outside the working
+    directory.
+    """
+    env = os.environ.get("QWEN_ADD_DIRS")
+    raw = env or _ini("qwen", "add_dirs") or ""
+    if raw:
+        return [p.strip() for p in raw.replace(",", ":").split(":") if p.strip()]
+    return []
+
+
+def get_qwen_approval_mode() -> str:
+    """Qwen Code approval mode (``--approval-mode``). Env ``QWEN_APPROVAL_MODE``, ini ``[qwen] approval_mode``, or ``yolo``.
+
+    ``yolo`` is the headless non-interactive mode — matches the
+    one-shot-by-design shape of the dsh adapter (no stdin waits, no
+    confirmation prompts). Other values (e.g. ``auto-edit``, ``default``)
+    are accepted as a config override; the value here is the literal string
+    the adapter passes to ``--approval-mode``.
+    """
+    env = os.environ.get("QWEN_APPROVAL_MODE")
+    if env:
+        return env
+    configured = _ini("qwen", "approval_mode")
+    return configured or "yolo"
+
+
 # ── MCP-Light capability surface (Run 004 / Objective A) ─────────────
 #
 # MCP-Light is a governed, OPTIONAL capability: defaults are empty/false so
