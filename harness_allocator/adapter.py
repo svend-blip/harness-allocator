@@ -239,6 +239,15 @@ def _codex_argv(model_target, cfg) -> list:
     ``--ask-for-approval``) all come from ``cfg`` and are omitted when that
     config returns empty values, so a caller that configures none of them keeps
     the historical ``codex -m <model>`` shape byte-for-byte.
+
+    Profile selector (Run 024 / D1): when ``cfg.get_codex_profile()`` returns
+    ``"gpu"`` the sandbox mode is overridden to ``get_codex_profile_gpu_sandbox()``
+    (default ``danger-full-access``) and the profile's add-dirs are APPENDED
+    after the base add-dirs as ``--add-dir <dir>``. Empty / absent / any other
+    profile value leaves the launch byte-identical to today. The profile is
+    read DEFENSIVELY (``getattr`` + ``lambda: ""``) so the existing
+    ``_FakeCfg`` test double in tests/test_harness_allocator.py (which has no
+    ``get_codex_profile`` method) keeps working.
     """
     parts = [cfg.get_codex_bin()]
     model = model_target_identity(model_target)
@@ -254,7 +263,24 @@ def _codex_argv(model_target, cfg) -> list:
         if d:
             parts += ["--add-dir", d]
 
-    parts += ["--sandbox", cfg.get_codex_sandbox()]
+    # Profile selector (D1). An empty/absent profile keeps today's launch
+    # shape byte-for-byte — the ratchet the 272 existing HA-1 tests pin.
+    profile = (
+        getattr(cfg, "get_codex_profile", lambda: "")() or ""
+    ).strip()
+
+    if profile == "gpu":
+        # Sandbox override (the gpu signal — danger-full-access by default).
+        parts += ["--sandbox", cfg.get_codex_profile_gpu_sandbox()]
+        # Append the gpu add-dirs AFTER the base loop.
+        for d in cfg.get_codex_profile_gpu_add_dirs():
+            d = (d or "").strip()
+            if d:
+                parts += ["--add-dir", d]
+    else:
+        # Profile-less path: today's behaviour, byte-identical.
+        parts += ["--sandbox", cfg.get_codex_sandbox()]
+
     parts += ["--ask-for-approval", cfg.get_codex_ask_for_approval()]
     return parts
 

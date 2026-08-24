@@ -91,6 +91,68 @@ def get_codex_ask_for_approval() -> str:
     return configured or "never"
 
 
+# ── Codex profile selector (Run 024 / D1) ────────────────────────────
+#
+# A PROFILE SELECTOR lets the implementer role (or any caller) pick a
+# pre-baked launch shape without rewriting the adapter for each new mode.
+# Today the only profile is ``gpu`` — it overrides the sandbox to
+# ``danger-full-access`` (so the gpu-gated proofs can run) and APPENDS
+# additional ``--add-dir`` flags after the base add-dirs.
+#
+# Precedence (env -> ini -> default) matches the rest of this module:
+#
+#   CODEX_PROFILE env (e.g. "gpu") wins. An empty/absent env falls through
+#   to the ini ``[harness] codex_profile`` setting, then to ``""`` (the
+#   profile-less path — today's launch shape, byte-for-byte unchanged).
+#
+# The profile-specific knobs live in ``[codex_profile_gpu]`` (sandbox,
+# add_dirs). That section is OUTSIDE the run-024 §3 scope fence: it is the
+# OVERRIDE channel callers may populate to tune gpu without code changes.
+# Defaults here (``danger-full-access`` / ``[]``) carry the bound values
+# when the ini section is absent, exactly like the other adapters.
+
+def get_codex_profile() -> str:
+    """Codex profile selector. Env ``CODEX_PROFILE``, ini ``[harness] codex_profile``, or ``""`` (profile-less).
+
+    Empty (default) keeps the launch byte-identical to today's path. The
+    only profile this run defines is ``gpu``; unknown non-empty values
+    flow through the adapter without special handling — they are simply
+    not the gpu profile, so the profile-less path is taken (the bound
+    values are mode names, not arbitrary code).
+    """
+    env = os.environ.get("CODEX_PROFILE")
+    if env and env.strip():
+        return env.strip()
+    configured = _ini("harness", "codex_profile", fallback="")
+    return (configured or "").strip()
+
+
+def get_codex_profile_gpu_sandbox() -> str:
+    """Sandbox mode the gpu profile renders. Ini ``[codex_profile_gpu] sandbox`` or ``danger-full-access``.
+
+    ``danger-full-access`` is the human-decided value (GOAL.md §1 D1 DECISION
+    FOR THE HUMAN, bound in RUN-LEDGER) for the gpu profile — gpu-gated
+    proofs need to escape the sandbox. Other profiles are free to override
+    this via the ini section.
+    """
+    configured = _ini("codex_profile_gpu", "sandbox", fallback="")
+    return (configured or "").strip() or "danger-full-access"
+
+
+def get_codex_profile_gpu_add_dirs() -> list:
+    """Add-dir paths the gpu profile appends after the base add-dirs. Ini ``[codex_profile_gpu] add_dirs`` or ``[]``.
+
+    Same colon/comma split idiom as :func:`get_codex_add_dirs`: env-empty
+    here (this knob is ini-only — values travel via the override channel),
+    ini ``[codex_profile_gpu] add_dirs``, default ``[]``. Each non-empty
+    entry becomes one ``--add-dir <dir>`` AFTER the base add-dirs loop.
+    """
+    raw = _ini("codex_profile_gpu", "add_dirs", fallback="")
+    if raw:
+        return [p.strip() for p in raw.replace(",", ":").split(":") if p.strip()]
+    return []
+
+
 def get_codex_fresh_context_policy() -> str:
     """Codex fresh-context policy at a governed work-unit boundary.
 
