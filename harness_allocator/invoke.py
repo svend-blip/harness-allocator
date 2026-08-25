@@ -33,7 +33,7 @@ import subprocess
 import threading
 import time as _time
 
-from .adapter import build_qwen_env, build_task_argv
+from .adapter import build_goose_env, build_qwen_env, build_task_argv
 from .definition import model_target_identity, resolve_harness, resolve_role_key
 from .status import CANCELLED, ERROR, RUNNING, SUCCESS
 from .transport import compute_identity, make_request_id
@@ -135,14 +135,19 @@ def execute(role="", harness=None, model_target="", cwd=None, task="", cfg=None,
 
     try:
         argv = build_task_argv(harness_key, model_target=model_target, task=task, cfg=cfg)
-        # Endpoint wiring (D3 — Run 022 / HA-2): the qwen child env is
-        # {**parent_env, **build_qwen_env(...)} so the binary stays
-        # resolvable via PATH. When build_qwen_env returns an empty
-        # dict, pass env=None (inherit) so the four existing harnesses
-        # and the default qwen config stay byte-identical.
+        # Endpoint wiring (D3 — Run 022 / HA-2 / D3 — Run 026 / HA-3):
+        # the qwen child env is {**parent_env, **build_qwen_env(...)} and
+        # the goose child env is {**parent_env, **build_goose_env(...)} so
+        # the binary stays resolvable via PATH. When build_*_env returns
+        # an empty dict, pass env=None (inherit) so the four existing
+        # harnesses and the default qwen/goose configs stay
+        # byte-identical.
         if harness_key == "qwen":
             qwen_env = build_qwen_env(model_target=model_target, cfg=cfg)
             env = {**os.environ, **qwen_env} if qwen_env else None
+        elif harness_key == "goose":
+            goose_env = build_goose_env(model_target=model_target, cfg=cfg)
+            env = {**os.environ, **goose_env} if goose_env else None
         else:
             env = None
         proc_result = run_argv(
@@ -421,14 +426,19 @@ def execute_spec(spec, cfg=None):
 
     # (3) Run it via the existing run_argv path. capture wall-clock time
     #     around the call for timing.started_at/finished_at. The qwen
-    #     child env threads {**parent_env, **build_qwen_env(...)} so the
-    #     binary stays resolvable via PATH; non-qwen specs pass env=None
-    #     (inherit) and stay byte-identical to the existing four-harness
-    #     facade (D3 — Run 022 / HA-2).
+    #     child env threads {**parent_env, **build_qwen_env(...)} and the
+    #     goose child env threads {**parent_env, **build_goose_env(...)}
+    #     so the binary stays resolvable via PATH; non-qwen / non-goose
+    #     specs pass env=None (inherit) and stay byte-identical to the
+    #     existing four-harness facade (D3 — Run 022 / HA-2; D3 — Run 026
+    #     / HA-3).
     cwd = spec.working_directory or os.getcwd()
     if harness_key == "qwen":
         qwen_env = build_qwen_env(model_target=spec.model_reference, cfg=cfg)
         env = {**os.environ, **qwen_env} if qwen_env else None
+    elif harness_key == "goose":
+        goose_env = build_goose_env(model_target=spec.model_reference, cfg=cfg)
+        env = {**os.environ, **goose_env} if goose_env else None
     else:
         env = None
     started_at = _time.time()

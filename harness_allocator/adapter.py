@@ -49,6 +49,8 @@ def build_launch_command(harness, model_target=None, task=None, cfg=None) -> str
         return build_dsh_invocation(model_target, task, cfg)
     if harness == "qwen":
         return build_qwen_invocation(model_target, task, cfg)
+    if harness == "goose":
+        return build_goose_invocation(model_target, task, cfg)
     raise ValueError(f"not a native harness: {harness!r}")
 
 
@@ -62,6 +64,8 @@ def build_launch_argv(harness, model_target=None, task=None, cfg=None) -> list:
         return build_dsh_argv(model_target, task, cfg)
     if harness == "qwen":
         return build_qwen_argv(model_target, task, cfg)
+    if harness == "goose":
+        return build_goose_argv(model_target, task, cfg)
     raise ValueError(f"not a native harness: {harness!r}")
 
 
@@ -112,6 +116,8 @@ def build_task_invocation(harness, model_target=None, task=None, cfg=None) -> st
         return build_dsh_invocation(model_target, task, cfg)
     if harness == "qwen":
         return build_qwen_invocation(model_target, task, cfg)
+    if harness == "goose":
+        return build_goose_invocation(model_target, task, cfg)
     raise ValueError(f"no one-shot task invocation for harness {harness!r}")
 
 
@@ -127,6 +133,8 @@ def build_task_argv(harness, model_target=None, task=None, cfg=None) -> list:
         return build_dsh_argv(model_target, task, cfg)
     if harness == "qwen":
         return build_qwen_argv(model_target, task, cfg)
+    if harness == "goose":
+        return build_goose_argv(model_target, task, cfg)
     raise ValueError(f"no one-shot task invocation for harness {harness!r}")
 
 
@@ -212,6 +220,137 @@ def build_qwen_env(model_target=None, cfg=None) -> dict:
     if model:
         env["OPENAI_MODEL"] = model
     name = (cfg.get_qwen_api_key_env() or "").strip()
+    if name:
+        import os
+        key = os.environ.get(name)
+        if key:
+            env["OPENAI_API_KEY"] = key
+    return env
+
+
+
+def build_goose_invocation(model_target=None, task=None, cfg=None) -> str:
+    """The one-shot Goose invocation as a shell command string.
+
+    ``[<goose_bin>, run, --no-session, -q, --max-turns, 1, -t, <task>]``.
+    Model, provider, endpoint and api key NEVER appear in argv — they
+    travel in the child env (see :func:`build_goose_env`). ``task`` is
+    appended as the final argument when supplied; ``model_target`` is
+    accepted for call-shape compatibility and deliberately NOT used (the
+    allocator never selects the model — it travels in the env as
+    ``GOOSE_MODEL``).
+    """
+    return _join_argv(build_goose_argv(model_target, task, cfg))
+
+
+def build_goose_argv(model_target=None, task=None, cfg=None) -> list:
+    """The one-shot Goose (Block AI agent CLI) invocation as an argv list.
+
+    ``[<goose_bin>, run, --no-session, -q, --max-turns, 1, -t, <task>]``.
+
+    Bound against the installed goose build 1.47.0 (see
+    ``goose run --help``):
+
+    - ``run`` is the headless one-shot subcommand (vs ``session``/``tui``).
+    - ``--no-session`` — "Execute commands without creating or using a
+      session file. Useful for automated runs." (per ``goose run --help``).
+    - ``-q`` (alias ``--quiet``) — "Suppress non-response output, printing
+      only the model response to stdout." Bounds the spinner / progress
+      chatter so stdout is parseable.
+    - ``--max-turns 1`` — caps the agent at a single turn (no stdin waits,
+      no permission prompts — the headless one-shot form is intrinsically
+      non-interactive; there is no ``--dangerously-skip-permissions`` flag
+      in ``goose run --help``).
+    - ``-t <task>`` — input text containing the task (use this in lieu of
+      the ``--instructions`` flag for one-shot text).
+
+    The complete ``task`` (any size, any embedded newlines) is one argv
+    element — no shlex round-trip, no shell interpolation. The model
+    identity, provider name, endpoint URL, and API key all travel in the
+    child env (:func:`build_goose_env`), not in argv; ``model_target`` is
+    accepted for call-shape compatibility and deliberately NOT used.
+
+    bin from ``cfg.get_goose_bin()``; missing/empty bin raises a typed
+    ``ValueError`` naming ``goose`` (pure string builder, NO filesystem
+    existence check) — the refusal surfaces BEFORE any subprocess. There
+    is NO CLI flag for ``--include-directories`` on the goose build, so
+    the configured add_dirs are not emitted in argv (the ``[goose] add_dirs``
+    config key is reserved for callers / future recipe-mode wiring).
+    ``task`` appended only when supplied; the launch form omits ``-t``.
+    """
+    if cfg is None:
+        cfg = config
+    parts = shlex.split(cfg.get_goose_bin())
+    if not parts:
+        # Missing-binary refusal (TG7 / D4 contract — mirror build_qwen_argv):
+        # the resolved binary is empty/whitespace. Refuse with a typed
+        # ValueError naming the harness — no filesystem existence check,
+        # the adapter is a pure string/list builder (no I/O).
+        raise ValueError(
+            "goose binary is not configured "
+            "(empty GOOSE_BIN / [goose] bin)"
+        )
+    parts += ["run", "--no-session", "-q", "--max-turns", "1"]
+    if task:
+        parts += ["-t", task]
+    return parts
+
+
+def build_goose_env(model_target=None, cfg=None) -> dict:
+    """The child-env override dict for a one-shot Goose invocation.
+
+    Goose's OpenAI-compatible provider reads env-based configuration, so
+    the dict carries the BOUND provider surface (measured against
+    goose 1.47.0 — ``goose run`` reads ``GOOSE_PROVIDER``, ``GOOSE_MODEL``,
+    ``OPENAI_BASE_URL``/``OPENAI_HOST``, ``OPENAI_API_KEY``):
+
+    - ``GOOSE_PROVIDER`` — bound literal ``"openai"`` (selects the
+      OpenAI-compatible provider; the handoff D1 binds an OpenAI-
+      compatible provider pointed at the ``/v1`` endpoint — the
+      ``opencode`` lesson).
+    - ``GOOSE_MODEL`` — the resolved model target VERBATIM. OMITTED when
+      empty (the env var name is ``GOOSE_MODEL``, NOT ``OPENAI_MODEL``
+      — goose rejects "No model configured" when only ``OPENAI_MODEL``
+      is set; verified by hand against ``goose run --debug``).
+    - ``OPENAI_BASE_URL`` — the resolved base URL FORCED to end in
+      ``/v1`` (appended when non-empty and not already ending in it).
+      OMITTED when the base URL is empty (goose's default endpoint).
+    - ``OPENAI_API_KEY`` — the VALUE read from the environment variable
+      NAMED by ``cfg.get_goose_api_key_env()`` (the config value is a
+      NAME, never a secret). OMITTED when the name is empty or the named
+      variable is unset / empty.
+
+    Returns an empty dict when there is nothing to set (no provider, no
+    base URL, no model, no key) — the caller can then fall back to
+    inheriting the parent env. This builder never reads or returns a
+    secret value of its own; the key is read from the NAMED environment
+    variable the config identifies. The XDG / HOME state-dir relocation
+    that goose requires on a read-only HOME is the invoke layer's job
+    (the adapter does NOT set HOME / XDG_* — it stays a pure env
+    carrier for the provider surface).
+    """
+    if cfg is None:
+        cfg = config
+    env: dict = {}
+    base_url = (cfg.get_goose_base_url() or "").strip()
+    name = (cfg.get_goose_api_key_env() or "").strip()
+    # Provider: bound literal for the OpenAI-compatible provider (the
+    # handoff's D1 binding). Set only when an OpenAI-specific knob is
+    # configured (base_url or api_key_env). The model alone does NOT
+    # imply OpenAI-compatible (the model can travel under any provider);
+    # so when neither base_url nor api_key is wired, GOOSE_PROVIDER is
+    # omitted and the caller inherits goose's default — this is what
+    # makes ``build_goose_env()`` return ``{}`` when nothing is
+    # configured (the qwen contract the tests guard).
+    if base_url or name:
+        env["GOOSE_PROVIDER"] = "openai"
+    if base_url:
+        if not base_url.endswith("/v1"):
+            base_url = base_url.rstrip("/") + "/v1"
+        env["OPENAI_BASE_URL"] = base_url
+    model = model_target_identity(model_target)
+    if model:
+        env["GOOSE_MODEL"] = model
     if name:
         import os
         key = os.environ.get(name)

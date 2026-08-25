@@ -1,4 +1,5 @@
-"""Normalized capability manifest for the five supported harnesses.
+"""Normalized capability manifest for the six supported harnesses (the sixth,
+``goose``, added in Run 026 / HA-3 — the first EXTENSIBLE harness in the set).
 
 The manifest is a dict with EXACTLY five groups (the ROADMAP §3 normalized
 shape MINUS its speculative ``models`` and ``workflow`` groups, which this run
@@ -255,11 +256,85 @@ _MANIFEST_QWEN = {
     },
 }
 
+# goose — headless one-shot invoked by adapter.build_goose_argv
+# ([goose, run, --no-session, -q, --max-turns, 1, -t, <task>]); model /
+# provider / endpoint / api key live in the child env
+# (adapter.build_goose_env), not argv; measured cancel path
+# (SIGINT → SIGTERM → SIGKILL) lives in invoke.run_argv (inherited from
+# the dsh / qwen path).
+#
+# Ground-truth (bound against the installed goose 1.47.0 build, see
+# ``goose run --help``, ``goose --help``, ``goose info``):
+#   - execution:  ``goose run`` is the headless one-shot subcommand (vs
+#                 ``session``/``tui`` which are interactive). Hence
+#                 headless=True, terminal=False, interactive=False.
+#   - workspace:  Goose has no explicit access tier in ``goose run
+#                 --help`` — the default behaviour is workspace-write
+#                 (the tool can read/write under the working directory).
+#                 full_access is left False (matches qwen).
+#   - sessions:   headless ``run`` does not create a session file when
+#                 ``--no-session`` is set (and our adapter always sets
+#                 it). Hence persistent_session=False,
+#                 session_resume=False, mode="oneshot".
+#   - extensions: goose IS the first EXTENSIBLE harness — measured
+#                 honestly from the build:
+#                   * mcp           True   (``goose mcp`` subcommand,
+#                                       ``--with-streamable-http-
+#                                       extension <url>``,
+#                                       ``--with-extension`` for stdio)
+#                   * skills        True   (``goose skills`` subcommand)
+#                   * custom_tools  True   (``goose plugin install <git>``,
+#                                       ``--with-extension <cmd>`` for
+#                                       ad-hoc stdio tools, and the
+#                                       bundled extensions:
+#                                       ``developer``, ``tutorial``,
+#                                       ``computercontroller``,
+#                                       ``memory``, ``scheduler``,
+#                                       ``code_execution`` — verified by
+#                                       ``goose run --with-builtin <name>``
+#                                       accepting each)
+#                 The qwen extensions values are NOT copied — Goose
+#                 supports all three (qwen lacks custom_tools).
+#   - automation: ``--no-session -q --max-turns 1`` is the bound
+#                 non-interactive surface; there is no ``--dangerously-
+#                 skip-permissions`` flag (verified — ``goose run --help``
+#                 does not list one). Hence non_interactive=True,
+#                 deterministic_exit=True, interrupt_safe=True (the
+#                 invoke layer's measured SIGINT → SIGTERM → SIGKILL
+#                 path applies unchanged).
+_MANIFEST_GOOSE = {
+    "execution": {
+        "terminal": False,
+        "headless": True,
+        "interactive": False,
+    },
+    "workspace": {
+        "read_only": False,
+        "workspace_write": True,
+        "full_access": False,
+    },
+    "sessions": {
+        "persistent_session": False,
+        "session_resume": False,
+        "mode": "oneshot",
+    },
+    "extensions": {
+        "skills": True,
+        "mcp": True,
+        "custom_tools": True,
+    },
+    "automation": {
+        "non_interactive": True,
+        "deterministic_exit": True,
+        "interrupt_safe": True,
+    },
+}
+
 # ── Public API ─────────────────────────────────────────────────────────
 
 
 #: The set of harness keys that ``get_capabilities`` accepts.
-SUPPORTED_HARNESSES = ("codex", "claude-code", "opencode", "dsh", "qwen")
+SUPPORTED_HARNESSES = ("codex", "claude-code", "opencode", "dsh", "qwen", "goose")
 
 
 def get_capabilities(harness) -> dict:
@@ -271,7 +346,8 @@ def get_capabilities(harness) -> dict:
 
     Raises :class:`UnknownHarnessError` (a :class:`ValueError` subclass) when
     ``harness`` is not one of ``codex``, ``claude-code``, ``opencode``,
-    ``dsh``. The error message names the unknown harness.
+    ``dsh``, ``qwen``, ``goose``. The error message names the unknown
+    harness.
     """
     if harness == "codex":
         # Return a fresh copy so callers cannot mutate the module-level dict.
@@ -313,5 +389,13 @@ def get_capabilities(harness) -> dict:
             "sessions": dict(_MANIFEST_QWEN["sessions"]),
             "extensions": dict(_MANIFEST_QWEN["extensions"]),
             "automation": dict(_MANIFEST_QWEN["automation"]),
+        }
+    if harness == "goose":
+        return {
+            "execution": dict(_MANIFEST_GOOSE["execution"]),
+            "workspace": dict(_MANIFEST_GOOSE["workspace"]),
+            "sessions": dict(_MANIFEST_GOOSE["sessions"]),
+            "extensions": dict(_MANIFEST_GOOSE["extensions"]),
+            "automation": dict(_MANIFEST_GOOSE["automation"]),
         }
     raise UnknownHarnessError(f"unknown harness: {harness!r}")

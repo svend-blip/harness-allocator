@@ -323,6 +323,111 @@ def get_qwen_approval_mode() -> str:
     return configured or "yolo"
 
 
+# ── Goose adapter config (Run 026 / HA-3) ────────────────────────────
+#
+# Goose (Block AI agent CLI, github block/goose) is the first EXTENSIBLE
+# agent harness in the set — ``extensions`` (mcp / skills / custom_tools)
+# is measured honestly in capabilities.py. Endpoint wiring is env-based,
+# not flag-based (model/provider/endpoint/api key travel in the child env
+# only — see ``adapter.build_goose_env``), so config here exposes NAMES
+# (bin, base_url, api_key_env, ...) — never secrets.
+#
+# Defaults mirror the per-harness pattern: every value has a documented
+# default and an env override, no hardcoded host-absolute paths anywhere.
+# The default ``bin = "goose"`` matches the on-PATH launcher installed
+# host-side at ``~/.local/bin/goose`` for this run (verified, 1.47.0).
+#
+# The ``add_dirs`` config key is reserved: goose's CLI has NO
+# ``--include-directories`` flag (verified ``goose run --help``), so
+# ``build_goose_argv`` does NOT emit any directory flag. Callers may
+# still configure add_dirs for forward compatibility / recipe-mode wiring.
+
+
+def get_goose_bin() -> str:
+    """Goose launcher. Env ``GOOSE_BIN``, ini ``[goose] bin``, or ``goose``.
+
+    The default is the on-PATH ``goose`` binary — the verified
+    host-side install at ``~/.local/bin/goose`` (1.47.0) is reachable
+    via PATH for the run's execute layer. Like the other harnesses,
+    callers can override with a full launcher path via env or ini.
+    """
+    env = os.environ.get("GOOSE_BIN")
+    if env:
+        return env
+    configured = _ini("goose", "bin")
+    return configured or "goose"
+
+
+def get_goose_base_url() -> str:
+    """Goose endpoint base URL. Env ``GOOSE_BASE_URL``, ini ``[goose] base_url``, or empty.
+
+    Empty (default) means Goose's own endpoint — the allocator
+    deliberately does NOT hardcode an endpoint. When non-empty, the
+    adapter forces the value to end in ``/v1`` so it works with any
+    OpenAI-compatible server (the opencode lesson — local endpoints
+    need the ``/v1`` path). Goose's OpenAI-compatible provider reads
+    ``OPENAI_BASE_URL`` (verified by hand against ``goose run --debug``
+    on the 1.47.0 build with a stub endpoint).
+    """
+    env = os.environ.get("GOOSE_BASE_URL")
+    if env:
+        return env
+    configured = _ini("goose", "base_url")
+    return configured or ""
+
+
+def get_goose_api_key_env() -> str:
+    """Name of the environment variable that holds the Goose API key. Env ``GOOSE_API_KEY_ENV``, ini ``[goose] api_key_env``, or empty.
+
+    The config value is a NAME — never the secret itself. The adapter
+    reads the named variable from the environment when building the child
+    env (see ``adapter.build_goose_env``). Empty means "no key wired":
+    the child env simply omits ``OPENAI_API_KEY`` and the runtime
+    inherits the parent shell. This indirection lets callers route the
+    key through whatever env var they already populate (e.g.
+    ``GOOSE_API_KEY``, ``OPENAI_API_KEY``, or a vault-supplied name).
+    """
+    env = os.environ.get("GOOSE_API_KEY_ENV")
+    if env:
+        return env
+    configured = _ini("goose", "api_key_env")
+    return configured or ""
+
+
+def get_goose_workdir() -> str:
+    """Goose working root. Env ``GOOSE_WORKDIR``, ini ``[goose] workdir``, or empty.
+
+    Empty (default) means "use the caller's working directory" — Goose
+    has no explicit workdir flag in ``goose run --help``, so this is a
+    reserved knob for callers who want to anchor the run via a
+    documented config key. The adapter does NOT currently emit a flag
+    for it (verified).
+    """
+    env = os.environ.get("GOOSE_WORKDIR")
+    if env:
+        return env
+    configured = _ini("goose", "workdir")
+    return configured or ""
+
+
+def get_goose_add_dirs() -> list:
+    """Goose additional-directories knob. Env ``GOOSE_ADD_DIRS`` (colon/comma-separated), ini ``[goose] add_dirs``, or empty.
+
+    RESERVED config key — goose's ``goose run --help`` exposes NO
+    ``--include-directories`` flag (the qwen / opencode adapters have
+    it; goose does not). The adapter therefore does NOT emit any
+    directory flag in argv, regardless of this config. The key exists
+    so callers can declare intent without code changes when a future
+    goose build or recipe-mode wiring gains a directory-inclusion
+    feature. Empty (default) keeps the adapter a no-op for add_dirs.
+    """
+    env = os.environ.get("GOOSE_ADD_DIRS")
+    raw = env or _ini("goose", "add_dirs") or ""
+    if raw:
+        return [p.strip() for p in raw.replace(",", ":").split(":") if p.strip()]
+    return []
+
+
 # ── MCP-Light capability surface (Run 004 / Objective A) ─────────────
 #
 # MCP-Light is a governed, OPTIONAL capability: defaults are empty/false so
