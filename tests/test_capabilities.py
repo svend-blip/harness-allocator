@@ -31,6 +31,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from harness_allocator.capabilities import (  # noqa: E402
+    EXPERIMENTAL_HARNESSES,
     LargeInputRefusedError,
     MissingPromptError,
     SUPPORTED_HARNESSES,
@@ -231,14 +232,15 @@ def test_supported_harnesses_lists_the_six_contract_keys():
 # ── The specialized keys are universal (HA-4 exit decision) ────────────
 
 
-@pytest.mark.parametrize(
-    "harness",
-    ["codex", "claude-code", "opencode", "dsh", "qwen", "goose",
-     "sweagent", "aider"],
-)
-@pytest.mark.parametrize(
-    "key", ["repo_task_agent", "git_aware", "patch_output"]
-)
+# Derived from the registries, never listed by hand: a hardcoded roster is a
+# test that silently stops covering the next harness someone adds, which is
+# exactly when a universality contract is worth having.
+ALL_HARNESSES = tuple(SUPPORTED_HARNESSES) + tuple(EXPERIMENTAL_HARNESSES)
+SPECIALIZED_KEYS = ("repo_task_agent", "git_aware", "patch_output")
+
+
+@pytest.mark.parametrize("harness", ALL_HARNESSES)
+@pytest.mark.parametrize("key", SPECIALIZED_KEYS)
 def test_every_harness_answers_the_specialized_keys(harness, key):
     """Every harness declares all three — absence is not an allowed answer.
 
@@ -262,7 +264,8 @@ def test_the_specialized_keys_are_true_only_where_measured():
     assert get_capabilities("sweagent")["extensions"]["repo_task_agent"] is True
     assert get_capabilities("aider")["extensions"]["git_aware"] is True
     assert get_capabilities("aider")["extensions"]["patch_output"] is True
-    for harness in ("codex", "claude-code", "opencode", "dsh", "qwen", "goose"):
+    specialized = {"sweagent", "aider"}
+    for harness in (h for h in ALL_HARNESSES if h not in specialized):
         extensions = get_capabilities(harness)["extensions"]
         assert extensions["repo_task_agent"] is False
         assert extensions["git_aware"] is False
