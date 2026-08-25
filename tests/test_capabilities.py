@@ -175,7 +175,13 @@ def test_typed_errors_are_importable_from_capabilities_module():
             "sessions",
             {"persistent_session", "session_resume", "mode"},
         ),
-        ("extensions", {"skills", "mcp", "custom_tools"}),
+        # The three specialized keys were formalized as UNIVERSAL at the
+        # HA-4 exit: every harness declares all six, and one that lacks a
+        # capability says False rather than omitting the key. The
+        # exactness of this assertion is the point and is unchanged —
+        # only the contracted field set grew.
+        ("extensions", {"skills", "mcp", "custom_tools",
+                        "repo_task_agent", "git_aware", "patch_output"}),
         (
             "automation",
             {"non_interactive", "deterministic_exit", "interrupt_safe"},
@@ -220,3 +226,44 @@ def test_supported_harnesses_lists_the_six_contract_keys():
     assert set(SUPPORTED_HARNESSES) == {
         "codex", "claude-code", "opencode", "dsh", "qwen", "goose"
     }
+
+
+# ── The specialized keys are universal (HA-4 exit decision) ────────────
+
+
+@pytest.mark.parametrize(
+    "harness",
+    ["codex", "claude-code", "opencode", "dsh", "qwen", "goose",
+     "sweagent", "aider"],
+)
+@pytest.mark.parametrize(
+    "key", ["repo_task_agent", "git_aware", "patch_output"]
+)
+def test_every_harness_answers_the_specialized_keys(harness, key):
+    """Every harness declares all three — absence is not an allowed answer.
+
+    A consumer choosing between a chat-style harness and a repo-task or
+    patch-emitting one has to be able to ask any of them and get a boolean.
+    An optional key answers "absent", and the caller then has to decide
+    whether that means False — a reading this project has had falsified
+    before. Formalized by Human decision at the HA-4 exit, 2026-08-25.
+    """
+    extensions = get_capabilities(harness)["extensions"]
+    assert key in extensions, f"{harness} does not declare {key}"
+    assert isinstance(extensions[key], bool)
+
+
+def test_the_specialized_keys_are_true_only_where_measured():
+    """Honest values, not a blanket default.
+
+    sweagent operates on a repo under a deployment; aider emits patches and
+    manages git itself. The six chat-style harnesses do neither, and say so.
+    """
+    assert get_capabilities("sweagent")["extensions"]["repo_task_agent"] is True
+    assert get_capabilities("aider")["extensions"]["git_aware"] is True
+    assert get_capabilities("aider")["extensions"]["patch_output"] is True
+    for harness in ("codex", "claude-code", "opencode", "dsh", "qwen", "goose"):
+        extensions = get_capabilities(harness)["extensions"]
+        assert extensions["repo_task_agent"] is False
+        assert extensions["git_aware"] is False
+        assert extensions["patch_output"] is False

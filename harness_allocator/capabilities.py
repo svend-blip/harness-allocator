@@ -18,14 +18,35 @@ listed below; no field or group is added beyond these.
     workspace:    read_only (bool), workspace_write (bool), full_access (bool)
     sessions:     persistent_session (bool), session_resume (bool), mode (str)
     extensions:   skills (bool), mcp (bool), custom_tools (bool),
-                  repo_task_agent (bool, optional — non-universal; True only on
-                  specialized repo-task harnesses like ``sweagent``. The
-                  ROADMAP §3 capability-rule: keys are added per-harness, not
-                  as a global extension. DPMtF routes on this flag.)
-                  git_aware (bool, optional — non-universal; True only on
-                  specialized git-integrated harnesses like ``aider``).
-                  patch_output (bool, optional — non-universal; True only
-                  on specialized patch-emitting harnesses like ``aider``).
+                  repo_task_agent (bool), git_aware (bool),
+                  patch_output (bool)
+
+                  The last three are the SPECIALIZED keys, formalized by
+                  Human decision at the HA-4 exit (2026-08-25) on the run-027
+                  D5 assessment. They are UNIVERSAL: every harness declares
+                  all three, and a harness that lacks the capability declares
+                  it False rather than omitting the key.
+
+                  Universal because a consumer choosing between a chat-style
+                  harness and a repo-task or patch-emitting one has to be able
+                  to ASK. An optional key answers "absent", which the caller
+                  must then decide how to read — and "absent means false" is a
+                  reading this project has already had falsified once.
+
+                  ROADMAP §3's rule ("only add capabilities when DPMtF
+                  actually needs to make a routing or governance decision
+                  based on them") governs WHETHER a key exists, not whether
+                  it may be missing where false. These three earned their
+                  place by being measurable in the adapters' argv and env
+                  envelopes; declaring them everywhere is what makes them
+                  usable.
+
+                  Note a divergence worth knowing: ROADMAP §3's own example
+                  places patch_output and git_aware under a ``workflow``
+                  group. This manifest is bound to EXACTLY five groups
+                  (Run 020 §1 D1), so they live in ``extensions``. Adding a
+                  sixth group would break a contract every existing test
+                  asserts; the grouping is the compromise, the keys are not.
     automation:   non_interactive (bool), deterministic_exit (bool),
                   interrupt_safe (bool)
 
@@ -133,6 +154,9 @@ _MANIFEST_CODEX = {
         "skills": True,
         "mcp": True,
         "custom_tools": False,
+        "repo_task_agent": False,
+        "git_aware": False,
+        "patch_output": False,
     },
     "automation": {
         "non_interactive": False,
@@ -163,6 +187,9 @@ _MANIFEST_CLAUDE_CODE = {
         "skills": True,
         "mcp": True,
         "custom_tools": False,
+        "repo_task_agent": False,
+        "git_aware": False,
+        "patch_output": False,
     },
     "automation": {
         "non_interactive": False,
@@ -193,6 +220,9 @@ _MANIFEST_OPENCODE = {
         "skills": True,
         "mcp": True,
         "custom_tools": False,
+        "repo_task_agent": False,
+        "git_aware": False,
+        "patch_output": False,
     },
     "automation": {
         "non_interactive": False,
@@ -224,6 +254,9 @@ _MANIFEST_DSH = {
         "skills": False,
         "mcp": True,
         "custom_tools": False,
+        "repo_task_agent": False,
+        "git_aware": False,
+        "patch_output": False,
     },
     "automation": {
         "non_interactive": True,
@@ -264,6 +297,9 @@ _MANIFEST_QWEN = {
         "skills": True,
         "mcp": True,
         "custom_tools": False,
+        "repo_task_agent": False,
+        "git_aware": False,
+        "patch_output": False,
     },
     "automation": {
         "non_interactive": True,
@@ -338,6 +374,9 @@ _MANIFEST_GOOSE = {
         "skills": True,
         "mcp": True,
         "custom_tools": True,
+        "repo_task_agent": False,
+        "git_aware": False,
+        "patch_output": False,
     },
     "automation": {
         "non_interactive": True,
@@ -397,6 +436,7 @@ _MANIFEST_AIDER = {
         "custom_tools": False,
         "git_aware": True,
         "patch_output": True,
+        "repo_task_agent": False,
     },
     "automation": {
         "non_interactive": True,
@@ -475,6 +515,8 @@ _MANIFEST_SWEAGENT = {
         "mcp": False,
         "custom_tools": False,
         "repo_task_agent": True,
+        "git_aware": False,
+        "patch_output": False,
     },
     "automation": {
         "non_interactive": True,
