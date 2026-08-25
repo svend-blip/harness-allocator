@@ -57,6 +57,8 @@ def build_launch_command(harness, model_target=None, task=None, cfg=None) -> str
         return build_sweagent_invocation(model_target, task, cfg)
     if harness == "aider":
         return build_aider_invocation(model_target, task, cfg)
+    if harness == "crush":
+        return build_crush_invocation(model_target, task, cfg)
     raise ValueError(f"not a native harness: {harness!r}")
 
 
@@ -76,6 +78,8 @@ def build_launch_argv(harness, model_target=None, task=None, cfg=None) -> list:
         return build_sweagent_argv(model_target, task, cfg)
     if harness == "aider":
         return build_aider_argv(model_target, task, cfg)
+    if harness == "crush":
+        return build_crush_argv(model_target, task, cfg)
     raise ValueError(f"not a native harness: {harness!r}")
 
 
@@ -132,6 +136,8 @@ def build_task_invocation(harness, model_target=None, task=None, cfg=None) -> st
         return build_sweagent_invocation(model_target, task, cfg)
     if harness == "aider":
         return build_aider_invocation(model_target, task, cfg)
+    if harness == "crush":
+        return build_crush_invocation(model_target, task, cfg)
     raise ValueError(f"no one-shot task invocation for harness {harness!r}")
 
 
@@ -153,6 +159,8 @@ def build_task_argv(harness, model_target=None, task=None, cfg=None) -> list:
         return build_sweagent_argv(model_target, task, cfg)
     if harness == "aider":
         return build_aider_argv(model_target, task, cfg)
+    if harness == "crush":
+        return build_crush_argv(model_target, task, cfg)
     raise ValueError(f"no one-shot task invocation for harness {harness!r}")
 
 
@@ -598,6 +606,145 @@ def build_aider_env(model_target=None, cfg=None) -> dict:
     other build_*_env builders; neither is consulted here.
     """
     return {}
+
+
+
+
+def build_crush_invocation(model_target=None, task=None, cfg=None) -> str:
+    """The headless one-shot Charm Crush invocation as a shell command string.
+
+    ``[<crush_bin>, run, --yolo, --quiet, --model, <model>?, <task>?]`` —
+    shlex-joined for log/display. See :func:`build_crush_argv` for the
+    bound argv shape and the evidence grounding each flag in the
+    installed ``crush v0.91.0`` build. ``task`` is appended as the final
+    positional element only when supplied (the launch form omits it).
+    ``model_target`` is rendered into ``--model <model>`` (crush takes
+    the model as a CLI flag, like aider / sweagent — NOT env like qwen /
+    goose).
+    """
+    return _join_argv(build_crush_argv(model_target, task, cfg))
+
+
+def build_crush_argv(model_target=None, task=None, cfg=None) -> list:
+    """The headless one-shot Charm Crush invocation as an argv list.
+
+    ``[<crush_bin>, run, --yolo, --quiet, --model, <model>?, <task>?]``.
+
+    Bound against the installed crush v0.91.0 build (see
+    ``crush run --help``, ``crush --help``, ``crush --version``):
+
+    - ``run`` — the headless one-shot subcommand: ``crush run [prompt...]
+      [--flags]`` with the description "Run a single non-interactive
+      prompt" (``crush run --help``).
+    - ``--yolo`` — `-y` per ``crush --help`` FLAGS: "Automatically accept
+      all permissions (dangerous mode)". REQUIRED in argv — the
+      non-interactive auto-accept binding (analogous to qwen's
+      ``--approval-mode yolo`` and aider's ``--yes-always``).
+    - ``--quiet`` — `-q` per ``crush run --help`` FLAGS: "Hide spinner".
+      REQUIRED in argv — bounds the spinner so stdout is parseable
+      (mirror goose's ``-q``).
+    - ``--model <model>`` — `-m` per ``crush run --help`` FLAGS:
+      "Model to use. Accepts 'model' or 'provider/model' to disambiguate
+      models with the same name across providers". The model is a CLI
+      flag (mirror aider / sweagent, NOT env like qwen / goose).
+    - ``<task>`` — final positional element. crush runs from stdin when
+      ``<task>`` is empty AND stdin is not a TTY; the adapter therefore
+      appends the task as a positional element only when supplied —
+      the launch form omits it, matching every other headless adapter.
+
+    ``crush --cwd`` (`-c`) is NOT emitted — Popen's ``cwd`` keyword
+    handles the working directory (mirror every other adapter).
+
+    The complete ``task`` (any size, any embedded newlines) is one argv
+    element — no shlex round-trip, no shell interpolation. bin from
+    ``cfg.get_crush_bin()``; missing/empty bin raises a typed
+    ``ValueError`` naming ``crush`` (pure string builder, NO filesystem
+    existence check) — the refusal surfaces BEFORE any subprocess.
+
+    crush is a SUPPORTED harness (Run 028 / HA-5 — chat-style like
+    qwen/goose); there is NO experimental gate here (no
+    ``_require_experimental_enabled`` call).
+    """
+    if cfg is None:
+        cfg = config
+    parts = shlex.split(cfg.get_crush_bin())
+    if not parts:
+        # Missing-binary refusal (D1 / D4 contract — mirror build_qwen_argv /
+        # build_goose_argv / build_aider_argv): the resolved binary is
+        # empty/whitespace. Refuse with a typed ValueError naming the
+        # harness — no filesystem existence check, the adapter is a pure
+        # string/list builder (no I/O).
+        raise ValueError(
+            "crush binary is not configured "
+            "(empty CRUSH_BIN / [crush] bin)"
+        )
+    parts += ["run", "--yolo", "--quiet"]
+    model = model_target_identity(model_target)
+    if model:
+        parts += ["--model", model]
+    if task:
+        parts += [task]
+    return parts
+
+
+def build_crush_env(model_target=None, cfg=None) -> dict:
+    """The child-env override dict for a headless Crush invocation.
+
+    Crush's provider / API-key wiring is split between env (API keys)
+    and ``crushrc`` (provider + base_url). The dict follows the qwen /
+    goose env-based endpoint-wiring pattern (Run 022 / HA-2, Run 026 /
+    HA-3) for parity:
+
+    - ``OPENAI_BASE_URL`` — the resolved base URL FORCED to end in
+      ``/v1`` (appended when non-empty and not already ending in it).
+      OMITTED when the base URL is empty. **Honest boundary:** crush's
+      base_url is configured via ``crushrc`` (the README §"Custom
+      Providers" example uses ``provider add <name> --type openai-compat
+      --base-url <url>``), NOT via a standard env var. The
+      ``OPENAI_BASE_URL`` wiring here exists for qwen/goose
+      pattern-parity — an OpenAI-compatible provider wired through
+      crushrc may ALSO honor ``OPENAI_BASE_URL`` if the provider type
+      reads it (the README does NOT promise this), so the wiring is
+      best-effort pattern-parity, not a documented contract. The
+      supported way to point crush at a custom base URL is crushrc.
+    - ``OPENAI_API_KEY`` — the VALUE read from the environment variable
+      NAMED by ``cfg.get_crush_api_key_env()`` (the config value is a
+      NAME, never a secret). crush reads ``OPENAI_API_KEY`` natively
+      when an OpenAI-compatible provider is selected (README §"API
+      Keys" lists it for OpenAI). OMITTED when the name is empty or the
+      named variable is unset / empty.
+
+    Returns an empty dict when there is nothing to set (no base URL,
+    no key) — the caller can then fall back to inheriting the parent
+    env. This mirrors the qwen / goose "return ``{}`` when nothing is
+    wired" contract; the invoke layer's env-threading block uses
+    ``env = {**os.environ, **crush_env} if crush_env else None`` so an
+    empty-dict result falls through to ``env=None`` (inherit). The
+    builder never reads or returns a secret value of its own; the key
+    is read from the NAMED environment variable the config identifies.
+
+    ``model_target`` is accepted for call-shape parity with the other
+    ``build_*_env`` builders and is deliberately NOT used in env —
+    crush takes the model as a CLI flag (``--model <model>``, set by
+    :func:`build_crush_argv`), mirroring aider / sweagent.
+    """
+    if cfg is None:
+        cfg = config
+    env: dict = {}
+    base_url = (cfg.get_crush_base_url() or "").strip()
+    if base_url:
+        if not base_url.endswith("/v1"):
+            base_url = base_url.rstrip("/") + "/v1"
+        env["OPENAI_BASE_URL"] = base_url
+    name = (cfg.get_crush_api_key_env() or "").strip()
+    if name:
+        import os
+        key = os.environ.get(name)
+        if key:
+            env["OPENAI_API_KEY"] = key
+    return env
+
+
 
 
 def _require_experimental_enabled(harness, cfg):

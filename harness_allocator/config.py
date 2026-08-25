@@ -428,6 +428,83 @@ def get_goose_add_dirs() -> list:
     return []
 
 
+# ── Crush adapter config (Run 028 / HA-5) ──────────────────────────
+#
+# Crush (Charm's terminal-first AI assistant, npm @charmland/crush, v0.91.0
+# pinned system tool) is the SEVENTH SUPPORTED harness — chat-style like
+# qwen / goose, headless one-shot like qwen / goose / sweagent / aider.
+#
+# Provider / endpoint wiring splits between env (API keys) and ``crushrc``
+# (provider + base_url). The ``OPENAI_BASE_URL`` wiring here is
+# qwen/goose pattern-parity — crush's documented way to set a base URL
+# is ``crushrc`` (README §"Custom Providers"), NOT a standard env var.
+# Defaults mirror the per-harness pattern: every value has a documented
+# default and an env override, no hardcoded host-absolute paths
+# anywhere. The default ``bin = "crush"`` matches the on-PATH launcher
+# installed host-side at ``~/.nvm/versions/node/v22.22.3/bin/crush`` for
+# this run (verified, v0.91.0).
+
+
+def get_crush_bin() -> str:
+    """Crush launcher. Env ``CRUSH_BIN``, ini ``[crush] bin``, or ``crush``.
+
+    The default is the on-PATH ``crush`` binary — the verified
+    host-side install at
+    ``~/.nvm/versions/node/v22.22.3/bin/crush`` (v0.91.0, a pinned
+    system tool installed via ``npm install -g @charmland/crush``).
+    Like the other harnesses, callers can override with a full launcher
+    path via env or ini.
+    """
+    env = os.environ.get("CRUSH_BIN")
+    if env:
+        return env
+    configured = _ini("crush", "bin")
+    return configured or "crush"
+
+
+def get_crush_base_url() -> str:
+    """Crush endpoint base URL. Env ``CRUSH_BASE_URL``, ini ``[crush] base_url``, or empty.
+
+    Empty (default) means crush's own / crushrc-configured endpoint —
+    the allocator deliberately does NOT hardcode an endpoint. When
+    non-empty, the adapter forces the value to end in ``/v1`` so it
+    works with any OpenAI-compatible server (the opencode lesson —
+    local endpoints need the ``/v1`` path).
+
+    **Honest boundary:** crush's documented base URL is configured via
+    ``crushrc`` (README §"Custom Providers" — ``provider add <name> --type
+    openai-compat --base-url <url>``), NOT via a standard env var. The
+    ``OPENAI_BASE_URL`` env wiring exists for qwen/goose pattern-parity
+    only; it is best-effort pattern-parity, not a documented contract.
+    The supported way to point crush at a custom base URL is crushrc.
+    """
+    env = os.environ.get("CRUSH_BASE_URL")
+    if env:
+        return env
+    configured = _ini("crush", "base_url")
+    return configured or ""
+
+
+def get_crush_api_key_env() -> str:
+    """Name of the environment variable that holds the Crush API key. Env ``CRUSH_API_KEY_ENV``, ini ``[crush] api_key_env``, or empty.
+
+    The config value is a NAME — never the secret itself. The adapter
+    reads the named variable from the environment when building the child
+    env (see ``adapter.build_crush_env``). Empty means "no key wired":
+    the child env simply omits ``OPENAI_API_KEY`` and the runtime
+    inherits the parent shell. crush reads ``OPENAI_API_KEY`` natively
+    when an OpenAI-compatible provider is selected (README §"API Keys"),
+    so this indirection lets callers route the key through whatever env
+    var they already populate (e.g. ``CRUSH_API_KEY``,
+    ``OPENAI_API_KEY``, or a vault-supplied name).
+    """
+    env = os.environ.get("CRUSH_API_KEY_ENV")
+    if env:
+        return env
+    configured = _ini("crush", "api_key_env")
+    return configured or ""
+
+
 # ── MCP-Light capability surface (Run 004 / Objective A) ─────────────
 #
 # MCP-Light is a governed, OPTIONAL capability: defaults are empty/false so

@@ -16,7 +16,7 @@ import os
 from dataclasses import dataclass
 
 #: Harnesses the allocator launches directly (no model-allocator adapter).
-NATIVE_HARNESSES = ("dsh", "codex", "qwen", "goose", "sweagent", "aider")
+NATIVE_HARNESSES = ("dsh", "codex", "qwen", "goose", "sweagent", "aider", "crush")
 
 #: env var -> human description, for a safe error that never prints a value.
 REQUIRED_ENV = {

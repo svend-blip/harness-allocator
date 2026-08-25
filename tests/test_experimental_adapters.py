@@ -426,12 +426,12 @@ def test_experimental_harnesses_lists_sweagent_and_aider():
 
 
 def test_supported_harnesses_does_not_include_experimental_keys():
-    """SUPPORTED_HARNESSES still has the six contract keys (the experimental
+    """SUPPORTED_HARNESSES still has the seven contract keys (the experimental
     harness keys are NOT promoted into the public supported set — D3)."""
     assert "sweagent" not in SUPPORTED_HARNESSES
     assert "aider" not in SUPPORTED_HARNESSES
-    # Six keys (post-Run 026 / HA-3 + Run 022).
-    assert len(SUPPORTED_HARNESSES) == 6
+    # Seven keys (post-Run 028 / HA-5 + Run 026 / HA-3 + Run 022).
+    assert len(SUPPORTED_HARNESSES) == 7
 
 
 # ── F. env builders ────────────────────────────────────────────────────

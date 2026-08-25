@@ -1,9 +1,16 @@
-"""Normalized capability manifest for the seven supported harnesses (the sixth,
-``goose``, added in Run 026 / HA-3 — the first EXTENSIBLE harness in the set;
-the seventh, ``sweagent``, added in Run 027 / HA-4 — the first SPECIALIZED
-"repo-task-agent" harness in the set; the eighth, ``aider``, added in
-the same Run 027 — the first SPECIALIZED "git-aware + patch-output"
-harness in the set). ``SUPPORTED_HARNESSES`` is the production set (the
+"""Normalized capability manifest for the supported harnesses (nine total in
+this module — ``codex``, ``claude-code``, ``opencode``, ``dsh``, ``qwen``,
+``goose``, ``crush`` are the SEVEN ``SUPPORTED_HARNESSES``; ``sweagent`` and
+``aider`` are the TWO ``EXPERIMENTAL_HARNESSES`` — registered in the
+adapter surface but gated by ``[experimental] enabled_harnesses``, NOT
+exposed as defaults). ``goose`` (Run 026 / HA-3) was the first EXTENSIBLE
+harness in the set; ``sweagent`` (Run 027 / HA-4) was the first SPECIALIZED
+"repo-task-agent" harness in the set; ``aider`` (Run 027 / HA-4) was the
+first SPECIALIZED "git-aware + patch-output" harness in the set;
+``crush`` (Run 028 / HA-5) is a chat-style one-shot with Skills + MCP
+support and no repo-task / git-aware / patch-output specialization
+(skills/mcp True, custom_tools False; the three specialized keys are
+False, PRESENT-and-False per GOAL.md §3b). ``SUPPORTED_HARNESSES`` is the production set (the
 default scope of ``get_capabilities``); ``EXPERIMENTAL_HARNESSES`` is the
 CARVE-OUT — registered in the adapter surface but NOT exposed as defaults,
 gated by ``[experimental] enabled_harnesses`` (env
@@ -527,8 +534,89 @@ _MANIFEST_SWEAGENT = {
 
 
 
+# crush — headless one-shot invoked by adapter.build_crush_argv
+# ([<crush_bin>, run, --yolo, --quiet, --model, <model>?, <task>?]);
+# --yolo is the non-interactive auto-accept binding (analogous to qwen's
+# --approval-mode yolo and aider's --yes-always); --quiet hides the spinner
+# (mirror goose's -q, so stdout is parseable); --model is a CLI flag (mirror
+# aider / sweagent, NOT qwen / goose). API key travels in the child env
+# (adapter.build_crush_env wires OPENAI_API_KEY from a NAMED env var; crush
+# reads OPENAI_API_KEY natively — README §"API Keys"); base URL is configured
+# via crushrc (README §"Custom Providers" — `provider add --base-url`), NOT
+# via a standard env var — the OPENAI_BASE_URL wiring exists for qwen/goose
+# pattern-parity only (honest boundary documented in adapter.build_crush_env
+# and config.get_crush_base_url).
+#
+# Ground-truth (bound against the installed crush v0.91.0 build, see
+# ``crush --help``, ``crush run --help``, ``crush --version``, and the npm
+# package README at
+# the npm package README bundled with the @charmland/crush install):
+#   - execution:  ``crush run`` is the headless one-shot subcommand ("Run a
+#                 single non-interactive prompt" per ``crush run --help``).
+#                 Hence headless=True, terminal=False, interactive=False
+#                 (mirror qwen/goose/sweagent/aider).
+#   - workspace:  crush edits the user's project in cwd (the README's
+#                 "Extensible" bullet lists MCPs and Skills, both of which
+#                 operate on the working directory). No explicit access-tier
+#                 flag surfaces (verified ``crush --help``). read_only=False,
+#                 workspace_write=True, full_access=False (mirror qwen/goose/
+#                 sweagent/aider).
+#   - sessions:   crush IS session-based (README feature bullet "Session-Based:
+#                 maintain multiple work sessions and contexts per project";
+#                 --session {id}, --continue, and ``crush session`` manage
+#                 sessions). persistent_session=True, session_resume=True.
+#                 mode="oneshot" because the ADAPTER launches the one-shot
+#                 ``crush run`` form (the qwen precedent: session_resume=True
+#                 with mode="oneshot").
+#   - extensions: crush supports skills=True (Agent Skills open standard per
+#                 README §"Agent Skills"), mcp=True (MCP via ``mcp add``,
+#                 three transports http/stdio/sse per README §"MCPs").
+#                 custom_tools=False: crush's custom-tool surface IS MCP
+#                 (no separate goose-style plugin install). The three
+#                 specialized keys (repo_task_agent, git_aware,
+#                 patch_output) are False (chat-style — GOAL.md §3b: PRESENT
+#                 and False, never omitted — the universality tests derive
+#                 the roster from SUPPORTED_HARNESSES + EXPERIMENTAL_HARNESSES
+#                 and assert every harness declares all three).
+#   - automation: ``crush run --yolo`` is the bound non-interactive surface;
+#                 deterministic_exit=True (single-shot returns on its own
+#                 with no stdin wait); interrupt_safe=True (the invoke
+#                 layer's measured SIGINT → SIGTERM → SIGKILL path applies
+#                 unchanged).
+_MANIFEST_CRUSH = {
+    "execution": {
+        "terminal": False,
+        "headless": True,
+        "interactive": False,
+    },
+    "workspace": {
+        "read_only": False,
+        "workspace_write": True,
+        "full_access": False,
+    },
+    "sessions": {
+        "persistent_session": True,
+        "session_resume": True,
+        "mode": "oneshot",
+    },
+    "extensions": {
+        "skills": True,
+        "mcp": True,
+        "custom_tools": False,
+        "repo_task_agent": False,
+        "git_aware": False,
+        "patch_output": False,
+    },
+    "automation": {
+        "non_interactive": True,
+        "deterministic_exit": True,
+        "interrupt_safe": True,
+    },
+}
+
+
 #: The set of harness keys that ``get_capabilities`` accepts.
-SUPPORTED_HARNESSES = ("codex", "claude-code", "opencode", "dsh", "qwen", "goose")
+SUPPORTED_HARNESSES = ("codex", "claude-code", "opencode", "dsh", "qwen", "goose", "crush")
 
 #: The experimental set — registered in the adapter surface but NOT exposed
 #: as defaults. A harness in this tuple is gated by
@@ -547,8 +635,8 @@ def get_capabilities(harness) -> dict:
 
     Raises :class:`UnknownHarnessError` (a :class:`ValueError` subclass) when
     ``harness`` is not one of ``codex``, ``claude-code``, ``opencode``,
-    ``dsh``, ``qwen``, ``goose``. The error message names the unknown
-    harness.
+    ``dsh``, ``qwen``, ``goose``, ``crush``, ``sweagent``, ``aider``. The
+    error message names the unknown harness.
     """
     if harness == "codex":
         # Return a fresh copy so callers cannot mutate the module-level dict.
@@ -614,5 +702,13 @@ def get_capabilities(harness) -> dict:
             "sessions": dict(_MANIFEST_AIDER["sessions"]),
             "extensions": dict(_MANIFEST_AIDER["extensions"]),
             "automation": dict(_MANIFEST_AIDER["automation"]),
+        }
+    if harness == "crush":
+        return {
+            "execution": dict(_MANIFEST_CRUSH["execution"]),
+            "workspace": dict(_MANIFEST_CRUSH["workspace"]),
+            "sessions": dict(_MANIFEST_CRUSH["sessions"]),
+            "extensions": dict(_MANIFEST_CRUSH["extensions"]),
+            "automation": dict(_MANIFEST_CRUSH["automation"]),
         }
     raise UnknownHarnessError(f"unknown harness: {harness!r}")

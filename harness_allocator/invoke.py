@@ -35,6 +35,7 @@ import time as _time
 
 from .adapter import (
     build_aider_env,
+    build_crush_env,
     build_goose_env,
     build_qwen_env,
     build_sweagent_env,
@@ -168,6 +169,14 @@ def execute(role="", harness=None, model_target="", cwd=None, task="", cfg=None,
             # comment explains why: model is a CLI flag, key inherits).
             aider_env = build_aider_env(model_target=model_target, cfg=cfg)
             env = {**os.environ, **aider_env} if aider_env else None
+        elif harness_key == "crush":
+            # crush env is the qwen/goose empty-dict fallback
+            # (adapter.build_crush_env returns {} when nothing is wired
+            # — base_url empty AND api_key_env empty/named-var unset).
+            # crush is a SUPPORTED chat-style harness (Run 028 / HA-5),
+            # not experimental — no _require_experimental_enabled gate.
+            crush_env = build_crush_env(model_target=model_target, cfg=cfg)
+            env = {**os.environ, **crush_env} if crush_env else None
         else:
             env = None
         proc_result = run_argv(
@@ -471,6 +480,13 @@ def execute_spec(spec, cfg=None):
         # explains: model is a CLI flag, key inherits).
         aider_env = build_aider_env(model_target=spec.model_reference, cfg=cfg)
         env = {**os.environ, **aider_env} if aider_env else None
+    elif harness_key == "crush":
+        # crush env threads {**parent_env, **build_crush_env(...)} with
+        # the qwen/goose empty-dict fallback (Run 028 / HA-5 — chat-style
+        # supported harness, base_url configured via crushrc not env,
+        # OPENAI_API_KEY read from a NAMED env var).
+        crush_env = build_crush_env(model_target=spec.model_reference, cfg=cfg)
+        env = {**os.environ, **crush_env} if crush_env else None
     else:
         env = None
     started_at = _time.time()
