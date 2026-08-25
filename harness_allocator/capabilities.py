@@ -1,5 +1,13 @@
-"""Normalized capability manifest for the six supported harnesses (the sixth,
-``goose``, added in Run 026 / HA-3 — the first EXTENSIBLE harness in the set).
+"""Normalized capability manifest for the seven supported harnesses (the sixth,
+``goose``, added in Run 026 / HA-3 — the first EXTENSIBLE harness in the set;
+the seventh, ``sweagent``, added in Run 027 / HA-4 — the first SPECIALIZED
+"repo-task-agent" harness in the set; the eighth, ``aider``, added in
+the same Run 027 — the first SPECIALIZED "git-aware + patch-output"
+harness in the set). ``SUPPORTED_HARNESSES`` is the production set (the
+default scope of ``get_capabilities``); ``EXPERIMENTAL_HARNESSES`` is the
+CARVE-OUT — registered in the adapter surface but NOT exposed as defaults,
+gated by ``[experimental] enabled_harnesses`` (env
+``EXPERIMENTAL_ENABLED_HARNESSES``).
 
 The manifest is a dict with EXACTLY five groups (the ROADMAP §3 normalized
 shape MINUS its speculative ``models`` and ``workflow`` groups, which this run
@@ -9,7 +17,15 @@ listed below; no field or group is added beyond these.
     execution:    terminal (bool), headless (bool), interactive (bool)
     workspace:    read_only (bool), workspace_write (bool), full_access (bool)
     sessions:     persistent_session (bool), session_resume (bool), mode (str)
-    extensions:   skills (bool), mcp (bool), custom_tools (bool)
+    extensions:   skills (bool), mcp (bool), custom_tools (bool),
+                  repo_task_agent (bool, optional — non-universal; True only on
+                  specialized repo-task harnesses like ``sweagent``. The
+                  ROADMAP §3 capability-rule: keys are added per-harness, not
+                  as a global extension. DPMtF routes on this flag.)
+                  git_aware (bool, optional — non-universal; True only on
+                  specialized git-integrated harnesses like ``aider``).
+                  patch_output (bool, optional — non-universal; True only
+                  on specialized patch-emitting harnesses like ``aider``).
     automation:   non_interactive (bool), deterministic_exit (bool),
                   interrupt_safe (bool)
 
@@ -330,11 +346,154 @@ _MANIFEST_GOOSE = {
     },
 }
 
+
+# aider — headless one-shot invoked by adapter.build_aider_argv
+# ([<aider_bin>, --yes-always, --no-auto-commits, --no-dirty-commits,
+# --model <model>?, --message <task>?]); model is a CLI flag (mirror
+# sweagent, NOT qwen/goose); API key is inherited from the parent
+# environment (aider reads OPENAI_API_KEY itself); build_aider_env
+# returns {} (no load-bearing env). The non-interactive +
+# no-auto-commit trio is ALWAYS emitted in argv — aider commits by
+# default (the git-policy stays with the Human per Run 027 / HA-4 §2).
+#
+# Ground-truth (bound against the installed aider 0.86.2 build, see
+# ``aider --help``, ``aider --version``):
+#   - execution:  ``aider --message <task> --yes-always`` is the
+#                 headless one-shot form. headless=True, terminal=False,
+#                 interactive=False.
+#   - workspace:  aider edits the user's repo in place; no access-tier
+#                 flag surfaces. read_only=False, workspace_write=True,
+#                 full_access=False (mirror qwen/goose/sweagent).
+#   - sessions:   ``aider --message --yes-always`` creates no persistent
+#                 session — persistent_session=False, session_resume=False,
+#                 mode="oneshot".
+#   - extensions: aider does NOT expose a goose-style skills/mcp/plugin
+#                 surface; the three universal-extensions keys are False
+#                 (measured honestly). The TWO NEW non-universal keys
+#                 ``git_aware`` and ``patch_output`` are True (per
+#                 ROADMAP §3 — aider is a specialized git/patch harness).
+#   - automation: ``--message --yes-always`` is intrinsically
+#                 non-interactive; non_interactive=True,
+#                 deterministic_exit=True, interrupt_safe=True.
+_MANIFEST_AIDER = {
+    "execution": {
+        "terminal": False,
+        "headless": True,
+        "interactive": False,
+    },
+    "workspace": {
+        "read_only": False,
+        "workspace_write": True,
+        "full_access": False,
+    },
+    "sessions": {
+        "persistent_session": False,
+        "session_resume": False,
+        "mode": "oneshot",
+    },
+    "extensions": {
+        "skills": False,
+        "mcp": False,
+        "custom_tools": False,
+        "git_aware": True,
+        "patch_output": True,
+    },
+    "automation": {
+        "non_interactive": True,
+        "deterministic_exit": True,
+        "interrupt_safe": True,
+    },
+}
+
 # ── Public API ─────────────────────────────────────────────────────────
+
+# sweagent — headless one-shot invoked by adapter.build_sweagent_argv
+# ([<sweagent_bin>, run, --agent.model.name <model>, --env.repo.path <path>?,
+# --problem_statement.text <task>?]); the SWE-agent env binding
+# (SWE_AGENT_CONFIG_DIR / TOOLS_DIR / TRAJECTORY_DIR) lives in
+# adapter.build_sweagent_env, and is ALWAYS set (the bare CLI asserts on
+# CONFIG_DIR.is_dir() — verified). SWE-agent is a SPECIALIZED repo-task
+# agent — measured against the installed sweagent 1.1.0 build
+# (git checkout at $(home)/tools/SWE-agent/), see ``sweagent --help``,
+# ``sweagent run --help``, ``sweagent run --help_option
+# sweagent.agent.problem_statement.TextProblemStatement``.
+#
+# Ground-truth (bound against the installed build):
+#   - execution:  ``sweagent run`` is the headless one-shot subcommand.
+#                 The agent operates on a repo in a deployment (Docker by
+#                 default; ``--env.deployment.type local`` runs against a
+#                 local repo path). Hence headless=True, terminal=False,
+#                 interactive=False (matches the qwen/goose headless-
+#                 oneshot envelope).
+#   - workspace:  SWE-agent has no granular workspace flag in ``sweagent
+#                 run --help`` — its access tier is bound by the underlying
+#                 deployment container / local-repo mount. For the
+#                 local-repo form the agent reads and writes under the
+#                 repo root (workspace_write=True); no full_access flag is
+#                 surfaced (full_access=False, mirroring qwen/goose).
+#   - sessions:   ``sweagent run`` is single-instance — there is no
+#                 session-resume surface in ``sweagent run --help``. Hence
+#                 persistent_session=False, session_resume=False,
+#                 mode="oneshot" (the qwen/goose envelope).
+#   - extensions: SWE-agent does NOT expose a goose-style skills/mcp/plugin
+#                 surface (``sweagent --help`` lists no subcommands for
+#                 skills/mcp/plugins — its extensibility lives in the tool
+#                 bundles inside ``tools/``, exposed via the ``bundles:``
+#                 key in the agent config, NOT via CLI flags). Hence
+#                 skills=False, mcp=False, custom_tools=False (measured
+#                 honestly — NOT copied from qwen). The NEW non-universal
+#                 key ``repo_task_agent`` is True: SWE-agent IS the first
+#                 specialized repo-task agent in the set (ROADMAP §3's
+#                 capability-rule — added per-harness, not as a global
+#                 extension).
+#   - automation: ``sweagent run`` is a single-shot invocation bound to
+#                 ``--max-steps`` / a per-step budget (verify — the
+#                 sweagent run --help docstring names ``RunSingleActionConfig``
+#                 in the ``actions`` sub-key). The agent returns on its
+#                 own with no stdin wait. Hence non_interactive=True,
+#                 deterministic_exit=True, interrupt_safe=True (the invoke
+#                 layer's measured SIGINT → SIGTERM → SIGKILL path applies
+#                 unchanged).
+_MANIFEST_SWEAGENT = {
+    "execution": {
+        "terminal": False,
+        "headless": True,
+        "interactive": False,
+    },
+    "workspace": {
+        "read_only": False,
+        "workspace_write": True,
+        "full_access": False,
+    },
+    "sessions": {
+        "persistent_session": False,
+        "session_resume": False,
+        "mode": "oneshot",
+    },
+    "extensions": {
+        "skills": False,
+        "mcp": False,
+        "custom_tools": False,
+        "repo_task_agent": True,
+    },
+    "automation": {
+        "non_interactive": True,
+        "deterministic_exit": True,
+        "interrupt_safe": True,
+    },
+}
+
 
 
 #: The set of harness keys that ``get_capabilities`` accepts.
 SUPPORTED_HARNESSES = ("codex", "claude-code", "opencode", "dsh", "qwen", "goose")
+
+#: The experimental set — registered in the adapter surface but NOT exposed
+#: as defaults. A harness in this tuple is gated by
+#: ``config.get_experimental_enabled_harnesses()``; an empty enable-set
+#: refuses both build_*_argv calls with a typed ValueError BEFORE any
+#: subprocess. (Run 027 / HA-4 §1 D3 — the D3 experimental gate.)
+EXPERIMENTAL_HARNESSES = ("sweagent", "aider")
 
 
 def get_capabilities(harness) -> dict:
@@ -397,5 +556,21 @@ def get_capabilities(harness) -> dict:
             "sessions": dict(_MANIFEST_GOOSE["sessions"]),
             "extensions": dict(_MANIFEST_GOOSE["extensions"]),
             "automation": dict(_MANIFEST_GOOSE["automation"]),
+        }
+    if harness == "sweagent":
+        return {
+            "execution": dict(_MANIFEST_SWEAGENT["execution"]),
+            "workspace": dict(_MANIFEST_SWEAGENT["workspace"]),
+            "sessions": dict(_MANIFEST_SWEAGENT["sessions"]),
+            "extensions": dict(_MANIFEST_SWEAGENT["extensions"]),
+            "automation": dict(_MANIFEST_SWEAGENT["automation"]),
+        }
+    if harness == "aider":
+        return {
+            "execution": dict(_MANIFEST_AIDER["execution"]),
+            "workspace": dict(_MANIFEST_AIDER["workspace"]),
+            "sessions": dict(_MANIFEST_AIDER["sessions"]),
+            "extensions": dict(_MANIFEST_AIDER["extensions"]),
+            "automation": dict(_MANIFEST_AIDER["automation"]),
         }
     raise UnknownHarnessError(f"unknown harness: {harness!r}")

@@ -22,9 +22,11 @@ Two equivalent surfaces are exposed for each native harness:
 
 from __future__ import annotations
 
+from pathlib import Path
 import shlex
 
 from . import config
+from .capabilities import EXPERIMENTAL_HARNESSES
 from .definition import model_target_identity
 
 
@@ -51,6 +53,10 @@ def build_launch_command(harness, model_target=None, task=None, cfg=None) -> str
         return build_qwen_invocation(model_target, task, cfg)
     if harness == "goose":
         return build_goose_invocation(model_target, task, cfg)
+    if harness == "sweagent":
+        return build_sweagent_invocation(model_target, task, cfg)
+    if harness == "aider":
+        return build_aider_invocation(model_target, task, cfg)
     raise ValueError(f"not a native harness: {harness!r}")
 
 
@@ -66,6 +72,10 @@ def build_launch_argv(harness, model_target=None, task=None, cfg=None) -> list:
         return build_qwen_argv(model_target, task, cfg)
     if harness == "goose":
         return build_goose_argv(model_target, task, cfg)
+    if harness == "sweagent":
+        return build_sweagent_argv(model_target, task, cfg)
+    if harness == "aider":
+        return build_aider_argv(model_target, task, cfg)
     raise ValueError(f"not a native harness: {harness!r}")
 
 
@@ -118,6 +128,10 @@ def build_task_invocation(harness, model_target=None, task=None, cfg=None) -> st
         return build_qwen_invocation(model_target, task, cfg)
     if harness == "goose":
         return build_goose_invocation(model_target, task, cfg)
+    if harness == "sweagent":
+        return build_sweagent_invocation(model_target, task, cfg)
+    if harness == "aider":
+        return build_aider_invocation(model_target, task, cfg)
     raise ValueError(f"no one-shot task invocation for harness {harness!r}")
 
 
@@ -135,6 +149,10 @@ def build_task_argv(harness, model_target=None, task=None, cfg=None) -> list:
         return build_qwen_argv(model_target, task, cfg)
     if harness == "goose":
         return build_goose_argv(model_target, task, cfg)
+    if harness == "sweagent":
+        return build_sweagent_argv(model_target, task, cfg)
+    if harness == "aider":
+        return build_aider_argv(model_target, task, cfg)
     raise ValueError(f"no one-shot task invocation for harness {harness!r}")
 
 
@@ -357,6 +375,268 @@ def build_goose_env(model_target=None, cfg=None) -> dict:
         if key:
             env["OPENAI_API_KEY"] = key
     return env
+
+
+
+def build_sweagent_invocation(model_target=None, task=None, cfg=None) -> str:
+    """The one-shot SWE-agent invocation as a shell command string.
+
+    ``[<sweagent_bin>, run, --agent.model.name <model>, --env.repo.path <path>,
+    --problem_statement.text <task>]``. ``model_target`` is rendered into
+    ``--agent.model.name`` here (SWE-agent takes the model as a CLI flag —
+    DIFFERENT from qwen/goose, where the model travels in the child env).
+    ``task`` is appended via ``--problem_statement.text`` when supplied;
+    the launch form omits ``--problem_statement.text`` (and likewise omits
+    ``--env.repo.path`` if no repo is configured).
+    """
+    return _join_argv(build_sweagent_argv(model_target, task, cfg))
+
+
+def build_sweagent_argv(model_target=None, task=None, cfg=None) -> list:
+    """The one-shot SWE-agent invocation as an argv list.
+
+    ``[<sweagent_bin>, run, --agent.model.name <model>?, --env.repo.path <path>?,
+    --problem_statement.text <task>?]``.
+
+    Bound against the installed sweagent build 1.1.0 (see ``sweagent run
+    --help``, ``sweagent --help``, ``sweagent run --help_option
+    sweagent.agent.problem_statement.TextProblemStatement``):
+
+    - ``run`` is the one-shot subcommand — "Run swe-agent on a single problem
+      statement, for example a github issue" (``sweagent run --help``).
+    - ``--agent.model.name <model>`` — the model flag (CLI, NOT env —
+      measured against ``sweagent run --help``).
+    - ``--env.repo.path <path>`` — the local-repo anchor for the
+      ``LocalRepoConfig`` deployment; OMITTED when empty (then sweagent
+      defaults to its other repo forms — github / pre-existing).
+    - ``--problem_statement.text <task>`` — the inline-text problem
+      statement for the ``TextProblemStatement`` form; OMITTED when
+      empty (then the launch form takes over).
+    - ``--config config/default.yaml`` is NOT emitted by this adapter:
+      sweagent auto-loads the default config from
+      ``SWE_AGENT_CONFIG_DIR/config/default.yaml`` when no
+      ``--config`` is supplied (measured from
+      "Loading default config from …/config/default.yaml, because no
+      other config file is specified.").
+
+    The complete ``task`` (any size, any embedded newlines) is one argv
+    element — no shlex round-trip, no shell interpolation. bin from
+    ``cfg.get_sweagent_bin()``; missing/empty bin raises a typed
+    ``ValueError`` naming ``sweagent`` (pure string builder, NO
+    filesystem existence check) — the refusal surfaces BEFORE any
+    subprocess.
+    """
+    # Experimental gate (D3 — Run 027 / HA-4): refuse BEFORE the missing-
+    # binary check so a disabled experimental harness always refuses with
+    # the gate error — deterministic regardless of binary state. Pure
+    # string/list-builder refusal, no I/O, no subprocess.
+    _require_experimental_enabled("sweagent", cfg)
+    if cfg is None:
+        cfg = config
+    parts = shlex.split(cfg.get_sweagent_bin())
+    if not parts:
+        # Missing-binary refusal (D1 / D4 contract — mirror build_qwen_argv /
+        # build_goose_argv): the resolved binary is empty/whitespace. Refuse
+        # with a typed ValueError naming the harness — no filesystem
+        # existence check, the adapter is a pure string/list builder (no I/O).
+        raise ValueError(
+            "sweagent binary is not configured "
+            "(empty SWEAGENT_BIN / [sweagent] bin)"
+        )
+    parts += ["run"]
+    model = model_target_identity(model_target)
+    if model:
+        parts += ["--agent.model.name", model]
+    repo_path = (cfg.get_sweagent_repo_path() or "").strip()
+    if repo_path:
+        parts += ["--env.repo.path", repo_path]
+    if task:
+        parts += ["--problem_statement.text", task]
+    return parts
+
+
+def build_sweagent_env(model_target=None, cfg=None) -> dict:
+    """The child-env override dict for a one-shot SWE-agent invocation.
+
+    Unlike qwen / goose (which return ``{}`` when nothing is wired),
+    this builder ALWAYS returns the three REQUIRED SWE-agent directory
+    keys — they are LOAD-BEARING for the installed v1.1.0 git checkout
+    (the bare ``sweagent --version`` ASSERTS on ``CONFIG_DIR.is_dir()``;
+    see the env-binding correction in the sweagent install record).
+    The cfg getters all default to ``str(Path.home() / "tools" /
+    "SWE-agent" / ...)`` so a vanilla user (no env, no ini) still gets a
+    usable env; the user can override via env or ini when running
+    elsewhere:
+
+    - ``SWE_AGENT_CONFIG_DIR``   — from ``cfg.get_sweagent_config_dir()``
+    - ``SWE_AGENT_TOOLS_DIR``    — from ``cfg.get_sweagent_tools_dir()``
+    - ``SWE_AGENT_TRAJECTORY_DIR`` — from ``cfg.get_sweagent_trajectory_dir()``
+
+    Each value is stripped; an empty value short-circuits to the home-
+    relative default so the bare-CLI assertion never fires through this
+    builder. ``model_target`` is accepted for call-shape parity with
+    qwen/goose but is intentionally NOT used (the SWE-agent model is a
+    CLI flag — ``--agent.model.name`` — not an env var; mirroring the
+    qwen/goose builder signatures keeps the invoke layer clean).
+    """
+    if cfg is None:
+        cfg = config
+    config_dir = (cfg.get_sweagent_config_dir() or "").strip()
+    if not config_dir:
+        config_dir = str(Path.home() / "tools" / "SWE-agent" / "config")
+    tools_dir = (cfg.get_sweagent_tools_dir() or "").strip()
+    if not tools_dir:
+        tools_dir = str(Path.home() / "tools" / "SWE-agent" / "tools")
+    trajectory_dir = (cfg.get_sweagent_trajectory_dir() or "").strip()
+    if not trajectory_dir:
+        trajectory_dir = str(Path.home() / "tools" / "SWE-agent" / "trajectories")
+    return {
+        "SWE_AGENT_CONFIG_DIR": config_dir,
+        "SWE_AGENT_TOOLS_DIR": tools_dir,
+        "SWE_AGENT_TRAJECTORY_DIR": trajectory_dir,
+    }
+
+
+
+
+def build_aider_invocation(model_target=None, task=None, cfg=None) -> str:
+    """The headless one-shot Aider invocation as a shell command string.
+
+    ``[<aider_bin>, --yes-always, --no-auto-commits,
+    --no-dirty-commits, --model <model>?, --message <task>?]``. The non-interactive +
+    no-auto-commit binding (``--yes-always``, ``--no-auto-commits``,
+    ``--no-dirty-commits``) is ALWAYS present — aider commits by default
+    (the git-policy stays with the Human — run 027 / HA-4 §2). The
+    ``--model`` flag carries the model verbatim (aider takes the model
+    as a CLI flag, like sweagent — DIFFERENT from qwen/goose where the
+    model travels in the child env). ``task`` is appended via
+    ``--message`` when supplied; the launch form omits ``--message``.
+    """
+    return _join_argv(build_aider_argv(model_target, task, cfg))
+
+
+def build_aider_argv(model_target=None, task=None, cfg=None) -> list:
+    """The headless one-shot Aider invocation as an argv list.
+
+    ``[<aider_bin>, --yes-always, --no-auto-commits,
+    --no-dirty-commits, --model <model>?, --message <task>?]``.
+
+    Bound against the installed aider 0.86.2 build (see ``aider --help``,
+    ``aider --version``):
+
+    - ``--model <model>`` — the model flag (CLI, NOT env — measured against
+      ``aider --help``; env AIDER_MODEL is honored as fallback only, the
+      CLI flag wins).
+    - ``--yes-always`` — always answer yes to every yes/no prompt (the
+      headless non-interactive surface).
+    - ``--no-auto-commits`` — REQUIRED. aider commits by itself (default
+      True); this disables every auto-commit. The git-policy stays with
+      the Human (run 027 / HA-4 §2).
+    - ``--no-dirty-commits`` — REQUIRED. aider commits even when the repo
+      is dirty by default (AIDER_DIRTY_COMMITS); this disables that too
+      so a dirty work-tree pauses instead of committing thrash.
+    - ``--no-git-commit-verify`` / ``--no-git`` — present in ``aider
+      --help`` but NOT emitted by this adapter (the no-auto-commit trio
+      already covers the bind-points for run 027 / HA-4).
+    - ``--message <task>`` — the one-shot task flag (``aider --help``
+      documents the aliases ``--msg`` and ``-m`` as well: ``--message
+      COMMAND, --msg COMMAND, -m COMMAND``); the adapter DELIBERATELY
+      emits the long ``--message`` form for readability, appended only
+      when a task is supplied (the launch form omits it).
+
+    The complete ``task`` (any size, any embedded newlines) is one argv
+    element — no shlex round-trip, no shell interpolation. bin from
+    ``cfg.get_aider_bin()``; missing/empty bin raises a typed
+    ``ValueError`` naming ``aider`` (pure string builder, NO filesystem
+    existence check) — the refusal surfaces BEFORE any subprocess.
+    """
+    # Experimental gate (D3 — Run 027 / HA-4): refuse BEFORE the missing-
+    # binary check so a disabled experimental harness always refuses with
+    # the gate error — deterministic regardless of binary state. Pure
+    # string/list-builder refusal, no I/O, no subprocess.
+    _require_experimental_enabled("aider", cfg)
+    if cfg is None:
+        cfg = config
+    parts = shlex.split(cfg.get_aider_bin())
+    if not parts:
+        # Missing-binary refusal (D1 / D4 contract — mirror build_qwen_argv /
+        # build_goose_argv / build_sweagent_argv): the resolved binary is
+        # empty/whitespace. Refuse with a typed ValueError naming the
+        # harness — no filesystem existence check, the adapter is a pure
+        # string/list builder (no I/O).
+        raise ValueError(
+            "aider binary is not configured "
+            "(empty AIDER_BIN / [aider] bin)"
+        )
+    parts += ["--yes-always", "--no-auto-commits", "--no-dirty-commits"]
+    model = model_target_identity(model_target)
+    if model:
+        parts += ["--model", model]
+    if task:
+        parts += ["--message", task]
+    return parts
+
+
+def build_aider_env(model_target=None, cfg=None) -> dict:
+    """The child-env override dict for a headless Aider invocation.
+
+    Aider is special-cased: it has NO load-bearing child-env override.
+    The model is a CLI flag (``--model <model>``, set by
+    ``build_aider_argv``); the API key is inherited from the parent
+    environment (the allocator passes ``env=None`` / ``inherit`` when
+    ``build_aider_env`` returns ``{}``). This mirrors the qwen / goose
+    "return ``{}`` when nothing is wired" contract — the invoke layer's
+    env-threading block uses ``env = {**os.environ, **aider_env} if
+    aider_env else None`` so this builder's empty-dict result falls
+    through to ``env=None`` (inherit) byte-identical to the existing
+    harnesses.
+
+    Unlike sweagent (where the three SWE_AGENT_*_DIR env vars are
+    LOAD-BEARING and the builder ALWAYS returns them), this builder
+    ALWAYS returns ``{}`` — the empty dict is the entire binder. ``cfg``
+    and ``model_target`` are accepted for call-shape parity with the
+    other build_*_env builders; neither is consulted here.
+    """
+    return {}
+
+
+def _require_experimental_enabled(harness, cfg):
+    """Refuse (typed ValueError) when ``harness`` is experimental but not enabled.
+
+    D3 experimental gate (Run 027 / HA-4): the experimental set
+    (``EXPERIMENTAL_HARNESSES`` in ``capabilities.py``) is REGISTERED in
+    the adapter surface but NOT exposed as a default. A call to
+    ``build_sweagent_argv`` or ``build_aider_argv`` MUST refuse with a
+    typed ``ValueError`` BEFORE any subprocess when the harness is in
+    ``EXPERIMENTAL_HARNESSES`` but NOT in the user's
+    ``[experimental] enabled_harnesses`` set.
+
+    ``cfg`` defaults to the package's own ``harness_allocator.config``
+    so a vanilla invocation gets the same refusal. The check is purely
+    declarative: ``cfg.get_experimental_enabled_harnesses()`` returns
+    a set of stripped harness keys (the env/ini split idiom used by
+    ``get_codex_add_dirs`` / ``get_qwen_add_dirs``); empty set (default)
+    means "no experimental harness is enabled", so the very first call
+    to ``build_sweagent_argv`` / ``build_aider_argv`` in a vanilla
+    session refuses.
+
+    Pure string/list-builder refusal — no I/O, no subprocess, no
+    filesystem check. ``ValueError`` (a typed runtime error caught by
+    the invoke layer's existing ``except Exception`` / ``except
+    ValueError`` clause).
+    """
+    if harness not in EXPERIMENTAL_HARNESSES:
+        return
+    if cfg is None:
+        cfg = config
+    enabled = cfg.get_experimental_enabled_harnesses()
+    if harness not in enabled:
+        raise ValueError(
+            f"experimental harness {harness!r} is not enabled; "
+            f"add it to [experimental] enabled_harnesses "
+            f"(env EXPERIMENTAL_ENABLED_HARNESSES)"
+        )
+
 
 
 

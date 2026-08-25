@@ -529,3 +529,153 @@ def get_dsh_mcp_required():
     if raw is None:
         raw = _ini("harness", "dsh_mcp_required", fallback="")
     return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+
+def get_sweagent_bin() -> str:
+    """SWE-agent launcher. Env ``SWEAGENT_BIN``, ini ``[sweagent] bin``, or ``sweagent``.
+
+    The default is the on-PATH ``sweagent`` binary — the verified
+    host-side git install at ``~/.local/bin/sweagent`` (v1.1.0 from
+    ``https://github.com/SWE-agent/SWE-agent``, NOT the squatted PyPI
+    placeholder). Like the other harnesses, callers can override with a
+    full launcher path via env or ini.
+    """
+    env = os.environ.get("SWEAGENT_BIN")
+    if env:
+        return env
+    configured = _ini("sweagent", "bin")
+    return configured or "sweagent"
+
+
+def get_sweagent_config_dir() -> str:
+    """SWE-agent config dir. Env ``SWEAGENT_CONFIG_DIR``, ini ``[sweagent] config_dir``,
+    or ``str(Path.home() / "tools" / "SWE-agent" / "config")``.
+
+    The home-relative default is the LOAD-BEARING resource: the bare
+    ``sweagent --version`` ASSERTS on ``CONFIG_DIR.is_dir()`` (verified —
+    Run 027 / HA-4 install record). The pinned v1.1.0 git checkout at
+    ``~/tools/SWE-agent/config`` ships a default.yaml that sweagent
+    auto-loads when no ``--config`` flag is supplied. The adapter keeps
+    this env var set on EVERY invocation (build_sweagent_env always
+    carries the three SWE-agent dirs) so the assertion cannot fire.
+    """
+    env = os.environ.get("SWEAGENT_CONFIG_DIR")
+    if env:
+        return env
+    configured = _ini("sweagent", "config_dir")
+    return configured or str(Path.home() / "tools" / "SWE-agent" / "config")
+
+
+def get_sweagent_tools_dir() -> str:
+    """SWE-agent tools dir. Env ``SWEAGENT_TOOLS_DIR``, ini ``[sweagent] tools_dir``,
+    or ``str(Path.home() / "tools" / "SWE-agent" / "tools")``.
+
+    Home-relative default — same reasoning as ``get_sweagent_config_dir``
+    (the v1.1.0 git checkout lays out tools/ alongside config/, and the
+    bare CLI requires CONFIG_DIR + TOOLS_DIR + TRAJECTORY_DIR to be set
+    to existing directories).
+    """
+    env = os.environ.get("SWEAGENT_TOOLS_DIR")
+    if env:
+        return env
+    configured = _ini("sweagent", "tools_dir")
+    return configured or str(Path.home() / "tools" / "SWE-agent" / "tools")
+
+
+def get_sweagent_trajectory_dir() -> str:
+    """SWE-agent trajectory dir. Env ``SWEAGENT_TRAJECTORY_DIR``, ini ``[sweagent] trajectory_dir``,
+    or ``str(Path.home() / "tools" / "SWE-agent" / "trajectories")``.
+
+    Trajectory logs land here under the pinned v1.1.0 install; the dir
+    may be auto-created on first run. Home-relative default for parity
+    with the other two SWE-agent path getters.
+    """
+    env = os.environ.get("SWEAGENT_TRAJECTORY_DIR")
+    if env:
+        return env
+    configured = _ini("sweagent", "trajectory_dir")
+    return configured or str(Path.home() / "tools" / "SWE-agent" / "trajectories")
+
+
+def get_sweagent_repo_path() -> str:
+    """SWE-agent local-repo anchor. Env ``SWEAGENT_REPO_PATH``, ini ``[sweagent] repo_path``, or empty.
+
+    Empty (default) means "omit ``--env.repo.path`` from argv" — sweagent
+    then defaults to whichever repo form is configured (github /
+    pre-existing). Non-empty means ``LocalRepoConfig`` will be used at
+    ``<path>``. The adapter is a pure string/list builder — no
+    filesystem existence check (the refusal surface lives in the
+    runspec / execute layer).
+    """
+    env = os.environ.get("SWEAGENT_REPO_PATH")
+    if env:
+        return env
+    configured = _ini("sweagent", "repo_path")
+    return configured or ""
+
+
+def get_aider_bin() -> str:
+    """Aider launcher. Env ``AIDER_BIN``, ini ``[aider] bin``, or ``aider``.
+
+    The default is the on-PATH ``aider`` binary — the verified
+    host-side install at ``~/.local/bin/aider`` (0.86.2, a pinned system
+    tool, NOT pipx-managed). Like the other harnesses, callers can
+    override with a full launcher path via env or ini.
+
+    This is the ONLY ``[aider]`` getter by design: aider's model
+    travels in argv as ``--model <model>`` (set by
+    ``adapter.build_aider_argv``), and its API key is inherited from the
+    parent environment (aider reads ``OPENAI_API_KEY`` itself). There is
+    NO load-bearing child-env override for aider — the
+    ``adapter.build_aider_env`` returns ``{}`` (the empty dict is the
+    entire binder), so no base_url / api_key_env / model_env getter
+    exists. Mirror the qwen minimal-surface intent — go look at
+    ``build_aider_env`` for the longer-form explanation.
+    """
+    env = os.environ.get("AIDER_BIN")
+    if env:
+        return env
+    configured = _ini("aider", "bin")
+    return configured or "aider"
+
+
+def get_experimental_enabled_harnesses() -> set:
+    """The set of harness keys enabled via the experimental gate.
+
+    Env ``EXPERIMENTAL_ENABLED_HARNESSES`` (comma- OR colon-separated
+    list), ini ``[experimental] enabled_harnesses``, or empty (the
+    default — NO experimental harness is enabled).
+
+    The set is the explicit allow-list consulted by the
+    ``_require_experimental_enabled`` gate in ``adapter.py``: a harness
+    in ``capabilities.EXPERIMENTAL_HARNESSES`` (currently
+    ``("sweagent", "aider")``) only spawns when its key is present in
+    this set. Empty-set is the strict default — Run 027 / HA-4 ships
+    the experimental set REGISTERED but NOT exposed as defaults; the
+    user opts in explicitly per session.
+
+    Uses the SAME split idiom as ``get_codex_add_dirs`` and
+    ``get_qwen_add_dirs``: ``raw.replace(",", ":").split(":")`` so the
+    caller may use either separator. Each element is stripped; empty
+    entries are dropped (the ``if stripped`` filter). Empty raw string
+    returns an empty set (the "no opt-in" default). The env var name
+    follows the section-then-key idiom
+    (``[experimental] enabled_harnesses`` →
+    ``EXPERIMENTAL_ENABLED_HARNESSES``), NOT the
+    ``HA_EXPERIMENTAL_HARNESSES`` spelling (run 027 / HA-4 §2 binding).
+    """
+    env = os.environ.get("EXPERIMENTAL_ENABLED_HARNESSES")
+    if env:
+        raw = env
+    else:
+        raw = _ini("experimental", "enabled_harnesses") or ""
+    if not raw:
+        return set()
+    out: set = set()
+    for item in raw.replace(",", ":").split(":"):
+        stripped = item.strip()
+        if stripped:
+            out.add(stripped)
+    return out
+
+
