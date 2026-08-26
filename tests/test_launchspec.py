@@ -79,7 +79,7 @@ def test_get_launch_spec_key_set_is_exactly_the_five_bound_keys(harness):
     bound keys (TG1 contract). The roster is DERIVED from
     ``ALL_HARNESSES`` — never a hand-listed tuple of harness names."""
     spec = get_launch_spec(harness)
-    expected_keys = {"mode", "needs_initial_prompt", "anchor", "required_env", "activity_markers"}
+    expected_keys = {"mode", "needs_initial_prompt", "anchor", "required_env", "activity_markers", "launch_owner"}
     assert set(spec.keys()) == expected_keys, (
         f"launch spec for {harness!r} has keys {sorted(spec.keys())!r}, "
         f"expected exactly {sorted(expected_keys)!r}"

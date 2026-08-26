@@ -17,13 +17,17 @@ registers — exactly when a universal contract matters (GOAL.md §2:
 
 Bound keys (GOAL.md §1 / §2 — names bound)
 ------------------------------------------
-The LaunchSpec dict has EXACTLY five keys:
+The LaunchSpec dict has EXACTLY six keys:
 
   - ``mode``               one of ``resident_tui`` | ``terminal_wrapped`` | ``one_shot``
   - ``needs_initial_prompt`` (bool) — cold-start first wakeup after the launch command
   - ``anchor``             one of ``pane`` | ``child`` | ``none`` — which pid to record
   - ``required_env``       list of env var NAMES the harness cannot run without
   - ``activity_markers``   list of pane strings that mean "this harness is working"
+  - ``launch_owner``       one of ``"harness_allocator"`` | ``"model_allocator"`` — which
+                            allocator builds the launch command for this harness
+                            (DERIVED from ``NATIVE_HARNESSES`` membership, never
+                            hand-listed)
 
 Where each value was grounded
 -----------------------------
@@ -90,6 +94,7 @@ from .capabilities import (
     SUPPORTED_HARNESSES,
     UnknownHarnessError,
 )
+from .definition import NATIVE_HARNESSES
 
 
 #: Pane strings that mean "this harness is working". Today this is the ONE
@@ -205,10 +210,17 @@ def _all_specs():
 def get_launch_spec(harness) -> dict:
     """Return the LaunchSpec dict for ``harness``.
 
-    The returned dict has EXACTLY five keys: ``mode``, ``needs_initial_prompt``,
-    ``anchor``, ``required_env``, ``activity_markers``. Values are deep-copied
-    per call so a caller mutating the result cannot corrupt the module-level
-    table (mirrors :func:`harness_allocator.capabilities.get_capabilities`).
+    The returned dict has EXACTLY six keys: ``mode``, ``needs_initial_prompt``,
+    ``anchor``, ``required_env``, ``activity_markers``, ``launch_owner``.
+    Values are deep-copied per call so a caller mutating the result cannot
+    corrupt the module-level table (mirrors
+    :func:`harness_allocator.capabilities.get_capabilities`). ``launch_owner``
+    is COMPUTED from ``NATIVE_HARNESSES`` membership (one of
+    ``"harness_allocator"`` for harnesses the allocator launches directly,
+    ``"model_allocator"`` for harnesses whose launches are built by
+    model-allocator's client adapters) so the two registries cannot drift
+    apart silently — it is NOT a key in the ``_LAUNCH_SPEC_SUPPORTED`` /
+    ``_LAUNCH_SPEC_EXPERIMENTAL`` literal tables.
 
     Raises :class:`harness_allocator.capabilities.UnknownHarnessError` (a
     :class:`ValueError` subclass) when ``harness`` is not one of the names
@@ -225,6 +237,18 @@ def get_launch_spec(harness) -> dict:
                 "anchor": spec["anchor"],
                 "required_env": list(spec["required_env"]),
                 "activity_markers": list(spec["activity_markers"]),
+                # launch_owner is COMPUTED from NATIVE_HARNESSES membership
+                # (NOT a literal in the per-harness tables) so the two
+                # registries cannot drift apart silently. The
+                # ``tests/test_launch_owner.py`` binding test (Run 037 / D2)
+                # asserts that the difference between
+                # SUPPORTED_HARNESSES ∪ EXPERIMENTAL_HARNESSES and
+                # NATIVE_HARNESSES is exactly the set whose launch_owner is
+                # ``"model_allocator"``.
+                "launch_owner": (
+                    "harness_allocator" if harness in NATIVE_HARNESSES
+                    else "model_allocator"
+                ),
             }
     raise UnknownHarnessError(f"unknown harness: {harness!r}")
 
