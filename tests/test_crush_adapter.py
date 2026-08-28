@@ -17,7 +17,7 @@ Contract (GOAL.md Run 028 Sec 1 D1/D2 and the binding constraints):
   ``OPENAI_API_KEY`` (read from the NAMED env var). Empty config +
   empty model_target -> empty dict (the qwen / goose contract). The
   model is NOT in env (it's a CLI flag).
-- ``get_capabilities("crush")`` has EXACTLY the five contract groups
+- ``get_capabilities("crush")`` has EXACTLY eight contract groups
   with ``sessions.mode == "oneshot"``, ``execution.headless == True``,
   ``automation.non_interactive == True``, and extensions with EXACTLY
   six keys: ``{skills: True, mcp: True, custom_tools: False,
@@ -373,10 +373,11 @@ def test_crush_env_full_payload(monkeypatch):
 # --- C. manifest shape (get_capabilities("crush")) ------------------
 
 
-def test_crush_manifest_has_exactly_five_groups():
-    """get_capabilities("crush") returns EXACTLY the five contract groups."""
+def test_crush_manifest_has_exactly_eight_groups():
+    """get_capabilities("crush") returns EXACTLY eight contract groups."""
     manifest = get_capabilities("crush")
-    expected = {"execution", "workspace", "sessions", "extensions", "automation"}
+    expected = {"execution", "workspace", "sessions", "extensions",
+                "automation", "concurrency", "lifecycle", "models"}
     assert set(manifest.keys()) == expected
 
 

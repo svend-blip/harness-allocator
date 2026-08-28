@@ -57,6 +57,13 @@ listed below; no field or group is added beyond these.
     automation:   non_interactive (bool), deterministic_exit (bool),
                   interrupt_safe (bool)
 
+    concurrency:  parallel_readers (bool), exclusive_workspace_writer (bool)
+
+    lifecycle:    interrupt_current_task (bool), resumable_session (bool),
+                  child_process_cleanup (bool)
+
+    models:       openai_compatible_endpoint (bool)
+
 Values are grounded in measured behavior of the existing package
 (``harness_allocator/adapter.py``, ``harness_allocator/invoke.py``,
 ``harness_allocator/definition.py``, ``harness_allocator/terminal.py``):
@@ -170,6 +177,18 @@ _MANIFEST_CODEX = {
         "deterministic_exit": False,
         "interrupt_safe": False,
     },
+    "concurrency": {
+        "parallel_readers": True,
+        "exclusive_workspace_writer": False,
+    },
+    "lifecycle": {
+        "interrupt_current_task": False,
+        "resumable_session": False,
+        "child_process_cleanup": False,
+    },
+    "models": {
+        "openai_compatible_endpoint": False,
+    },
 }
 
 # claude-code — resident interactive TUI coding client (DPMtF-launched per
@@ -202,6 +221,18 @@ _MANIFEST_CLAUDE_CODE = {
         "non_interactive": False,
         "deterministic_exit": False,
         "interrupt_safe": False,
+    },
+    "concurrency": {
+        "parallel_readers": True,
+        "exclusive_workspace_writer": False,
+    },
+    "lifecycle": {
+        "interrupt_current_task": False,
+        "resumable_session": False,
+        "child_process_cleanup": False,
+    },
+    "models": {
+        "openai_compatible_endpoint": False,
     },
 }
 
@@ -236,6 +267,18 @@ _MANIFEST_OPENCODE = {
         "deterministic_exit": False,
         "interrupt_safe": False,
     },
+    "concurrency": {
+        "parallel_readers": True,
+        "exclusive_workspace_writer": False,
+    },
+    "lifecycle": {
+        "interrupt_current_task": False,
+        "resumable_session": False,
+        "child_process_cleanup": False,
+    },
+    "models": {
+        "openai_compatible_endpoint": False,
+    },
 }
 
 # dsh — headless one-shot (adapter.build_dsh_argv); MCP via
@@ -269,6 +312,18 @@ _MANIFEST_DSH = {
         "non_interactive": True,
         "deterministic_exit": True,
         "interrupt_safe": True,
+    },
+    "concurrency": {
+        "parallel_readers": True,
+        "exclusive_workspace_writer": False,
+    },
+    "lifecycle": {
+        "interrupt_current_task": False,
+        "resumable_session": False,
+        "child_process_cleanup": False,
+    },
+    "models": {
+        "openai_compatible_endpoint": False,
     },
 }
 
@@ -313,7 +368,20 @@ _MANIFEST_QWEN = {
         "deterministic_exit": True,
         "interrupt_safe": True,
     },
+    "concurrency": {
+        "parallel_readers": True,
+        "exclusive_workspace_writer": False,
+    },
+    "lifecycle": {
+        "interrupt_current_task": False,
+        "resumable_session": False,
+        "child_process_cleanup": False,
+    },
+    "models": {
+        "openai_compatible_endpoint": False,
+    },
 }
+
 
 # goose — headless one-shot invoked by adapter.build_goose_argv
 # ([goose, run, --no-session, -q, --max-turns, 1, -t, <task>]); model /
@@ -390,6 +458,18 @@ _MANIFEST_GOOSE = {
         "deterministic_exit": True,
         "interrupt_safe": True,
     },
+    "concurrency": {
+        "parallel_readers": True,
+        "exclusive_workspace_writer": False,
+    },
+    "lifecycle": {
+        "interrupt_current_task": False,
+        "resumable_session": False,
+        "child_process_cleanup": False,
+    },
+    "models": {
+        "openai_compatible_endpoint": False,
+    },
 }
 
 
@@ -449,6 +529,18 @@ _MANIFEST_AIDER = {
         "non_interactive": True,
         "deterministic_exit": True,
         "interrupt_safe": True,
+    },
+    "concurrency": {
+        "parallel_readers": True,
+        "exclusive_workspace_writer": False,
+    },
+    "lifecycle": {
+        "interrupt_current_task": False,
+        "resumable_session": False,
+        "child_process_cleanup": False,
+    },
+    "models": {
+        "openai_compatible_endpoint": False,
     },
 }
 
@@ -529,6 +621,18 @@ _MANIFEST_SWEAGENT = {
         "non_interactive": True,
         "deterministic_exit": True,
         "interrupt_safe": True,
+    },
+    "concurrency": {
+        "parallel_readers": True,
+        "exclusive_workspace_writer": False,
+    },
+    "lifecycle": {
+        "interrupt_current_task": False,
+        "resumable_session": False,
+        "child_process_cleanup": False,
+    },
+    "models": {
+        "openai_compatible_endpoint": False,
     },
 }
 
@@ -612,6 +716,18 @@ _MANIFEST_CRUSH = {
         "deterministic_exit": True,
         "interrupt_safe": True,
     },
+    "concurrency": {
+        "parallel_readers": True,
+        "exclusive_workspace_writer": False,
+    },
+    "lifecycle": {
+        "interrupt_current_task": False,
+        "resumable_session": False,
+        "child_process_cleanup": False,
+    },
+    "models": {
+        "openai_compatible_endpoint": False,
+    },
 }
 
 
@@ -625,13 +741,19 @@ SUPPORTED_HARNESSES = ("codex", "claude-code", "opencode", "dsh", "qwen", "goose
 #: subprocess. (Run 027 / HA-4 §1 D3 — the D3 experimental gate.)
 EXPERIMENTAL_HARNESSES = ("sweagent", "aider")
 
+#: Normalized capability value vocabulary used throughout the capability
+#: model. Every capability value assigned to a manifest section must come
+#: from this tuple.
+CAPABILITY_VALUES = ("SUPPORTED", "EMULATED", "UNSUPPORTED", "UNKNOWN")
+
 
 def get_capabilities(harness) -> dict:
     """Return the normalized capability manifest for ``harness``.
 
-    The returned dict has EXACTLY five groups (``execution``, ``workspace``,
-    ``sessions``, ``extensions``, ``automation``) with the fields documented
-    in this module's docstring; no field or group is added beyond those.
+    The returned dict has EXACTLY eight groups (``execution``, ``workspace``,
+    ``sessions``, ``extensions``, ``automation``, ``concurrency``,
+    ``lifecycle``, ``models``) with the fields documented in this module's
+    docstring; no field or group is added beyond those.
 
     Raises :class:`UnknownHarnessError` (a :class:`ValueError` subclass) when
     ``harness`` is not one of ``codex``, ``claude-code``, ``opencode``,
@@ -646,6 +768,9 @@ def get_capabilities(harness) -> dict:
             "sessions": dict(_MANIFEST_CODEX["sessions"]),
             "extensions": dict(_MANIFEST_CODEX["extensions"]),
             "automation": dict(_MANIFEST_CODEX["automation"]),
+            "concurrency": dict(_MANIFEST_CODEX["concurrency"]),
+            "lifecycle": dict(_MANIFEST_CODEX["lifecycle"]),
+            "models": dict(_MANIFEST_CODEX["models"]),
         }
     if harness == "claude-code":
         return {
@@ -654,6 +779,9 @@ def get_capabilities(harness) -> dict:
             "sessions": dict(_MANIFEST_CLAUDE_CODE["sessions"]),
             "extensions": dict(_MANIFEST_CLAUDE_CODE["extensions"]),
             "automation": dict(_MANIFEST_CLAUDE_CODE["automation"]),
+            "concurrency": dict(_MANIFEST_CLAUDE_CODE["concurrency"]),
+            "lifecycle": dict(_MANIFEST_CLAUDE_CODE["lifecycle"]),
+            "models": dict(_MANIFEST_CLAUDE_CODE["models"]),
         }
     if harness == "opencode":
         return {
@@ -662,6 +790,9 @@ def get_capabilities(harness) -> dict:
             "sessions": dict(_MANIFEST_OPENCODE["sessions"]),
             "extensions": dict(_MANIFEST_OPENCODE["extensions"]),
             "automation": dict(_MANIFEST_OPENCODE["automation"]),
+            "concurrency": dict(_MANIFEST_OPENCODE["concurrency"]),
+            "lifecycle": dict(_MANIFEST_OPENCODE["lifecycle"]),
+            "models": dict(_MANIFEST_OPENCODE["models"]),
         }
     if harness == "dsh":
         return {
@@ -670,6 +801,9 @@ def get_capabilities(harness) -> dict:
             "sessions": dict(_MANIFEST_DSH["sessions"]),
             "extensions": dict(_MANIFEST_DSH["extensions"]),
             "automation": dict(_MANIFEST_DSH["automation"]),
+            "concurrency": dict(_MANIFEST_DSH["concurrency"]),
+            "lifecycle": dict(_MANIFEST_DSH["lifecycle"]),
+            "models": dict(_MANIFEST_DSH["models"]),
         }
     if harness == "qwen":
         return {
@@ -678,6 +812,9 @@ def get_capabilities(harness) -> dict:
             "sessions": dict(_MANIFEST_QWEN["sessions"]),
             "extensions": dict(_MANIFEST_QWEN["extensions"]),
             "automation": dict(_MANIFEST_QWEN["automation"]),
+            "concurrency": dict(_MANIFEST_QWEN["concurrency"]),
+            "lifecycle": dict(_MANIFEST_QWEN["lifecycle"]),
+            "models": dict(_MANIFEST_QWEN["models"]),
         }
     if harness == "goose":
         return {
@@ -686,6 +823,9 @@ def get_capabilities(harness) -> dict:
             "sessions": dict(_MANIFEST_GOOSE["sessions"]),
             "extensions": dict(_MANIFEST_GOOSE["extensions"]),
             "automation": dict(_MANIFEST_GOOSE["automation"]),
+            "concurrency": dict(_MANIFEST_GOOSE["concurrency"]),
+            "lifecycle": dict(_MANIFEST_GOOSE["lifecycle"]),
+            "models": dict(_MANIFEST_GOOSE["models"]),
         }
     if harness == "sweagent":
         return {
@@ -694,6 +834,9 @@ def get_capabilities(harness) -> dict:
             "sessions": dict(_MANIFEST_SWEAGENT["sessions"]),
             "extensions": dict(_MANIFEST_SWEAGENT["extensions"]),
             "automation": dict(_MANIFEST_SWEAGENT["automation"]),
+            "concurrency": dict(_MANIFEST_SWEAGENT["concurrency"]),
+            "lifecycle": dict(_MANIFEST_SWEAGENT["lifecycle"]),
+            "models": dict(_MANIFEST_SWEAGENT["models"]),
         }
     if harness == "aider":
         return {
@@ -702,6 +845,9 @@ def get_capabilities(harness) -> dict:
             "sessions": dict(_MANIFEST_AIDER["sessions"]),
             "extensions": dict(_MANIFEST_AIDER["extensions"]),
             "automation": dict(_MANIFEST_AIDER["automation"]),
+            "concurrency": dict(_MANIFEST_AIDER["concurrency"]),
+            "lifecycle": dict(_MANIFEST_AIDER["lifecycle"]),
+            "models": dict(_MANIFEST_AIDER["models"]),
         }
     if harness == "crush":
         return {
@@ -710,5 +856,8 @@ def get_capabilities(harness) -> dict:
             "sessions": dict(_MANIFEST_CRUSH["sessions"]),
             "extensions": dict(_MANIFEST_CRUSH["extensions"]),
             "automation": dict(_MANIFEST_CRUSH["automation"]),
+            "concurrency": dict(_MANIFEST_CRUSH["concurrency"]),
+            "lifecycle": dict(_MANIFEST_CRUSH["lifecycle"]),
+            "models": dict(_MANIFEST_CRUSH["models"]),
         }
     raise UnknownHarnessError(f"unknown harness: {harness!r}")

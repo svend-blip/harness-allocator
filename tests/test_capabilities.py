@@ -2,8 +2,9 @@
 
 Contract (GOAL.md Run 020 §1 D1, §4 TG1, and the binding constraints):
 
-- ``get_capabilities(harness)`` returns a dict with EXACTLY five groups
-  (``execution``, ``workspace``, ``sessions``, ``extensions``, ``automation``)
+- ``get_capabilities(harness)`` returns a dict with EXACTLY eight groups
+  (``execution``, ``workspace``, ``sessions``, ``extensions``, ``automation``,
+  ``concurrency``, ``lifecycle``, ``models``)
   for each of the four supported harnesses
   (``codex``, ``claude-code``, ``opencode``, ``dsh``).
 - ``sessions.mode`` values are bound: codex "fresh", claude-code "resident",
@@ -41,15 +42,17 @@ from harness_allocator.capabilities import (  # noqa: E402
 )
 
 
-# ── TG1 — every supported harness has all five groups ──────────────────
+# ── TG1 — every supported harness has all eight groups ──────────────────
 
 
 @pytest.mark.parametrize("harness", ["codex", "claude-code", "opencode", "dsh"])
-def test_get_capabilities_returns_all_five_groups(harness):
-    """Each of the four harnesses exposes a manifest with EXACTLY the five
-    contract groups (TG1 contract)."""
+def test_get_capabilities_returns_all_eight_groups(harness):
+    """Each of the four harnesses exposes a manifest with EXACTLY eight groups
+    (execution, workspace, sessions, extensions, automation, concurrency,
+    lifecycle, models) (TG1 contract)."""
     manifest = get_capabilities(harness)
-    expected_groups = {"execution", "workspace", "sessions", "extensions", "automation"}
+    expected_groups = {"execution", "workspace", "sessions", "extensions",
+                       "automation", "concurrency", "lifecycle", "models"}
     assert set(manifest.keys()) == expected_groups, (
         f"manifest for {harness!r} has groups {sorted(manifest.keys())!r}, "
         f"expected exactly {sorted(expected_groups)!r}"
@@ -187,6 +190,10 @@ def test_typed_errors_are_importable_from_capabilities_module():
             "automation",
             {"non_interactive", "deterministic_exit", "interrupt_safe"},
         ),
+        ("concurrency", {"parallel_readers", "exclusive_workspace_writer"}),
+        ("lifecycle", {"interrupt_current_task", "resumable_session",
+                      "child_process_cleanup"}),
+        ("models", {"openai_compatible_endpoint"}),
     ],
 )
 def test_manifest_group_has_exact_fields(harness, group, fields):

@@ -10,7 +10,7 @@ Contract (GOAL.md Run 022 §1 D1/D2 and the binding constraints):
 - ``build_qwen_env`` carries ``OPENAI_BASE_URL`` (forced /v1),
   ``OPENAI_MODEL`` (verbatim), and ``OPENAI_API_KEY`` (read from the NAMED
   env var). Empty config returns an empty dict.
-- ``get_capabilities("qwen")`` has EXACTLY the five groups with
+- ``get_capabilities("qwen")`` has EXACTLY eight groups with
   ``sessions.mode == "oneshot"``, ``execution.headless == True``,
   ``automation.non_interactive == True``.
 - Config defaults: each ``get_qwen_*`` returns its documented default when
@@ -221,10 +221,11 @@ def test_qwen_invocation_launch_form():
 # ── C. manifest shape ────────────────────────────────────────────────
 
 
-def test_qwen_manifest_has_exactly_five_groups():
-    """get_capabilities("qwen") returns EXACTLY the five contract groups."""
+def test_qwen_manifest_has_exactly_eight_groups():
+    """get_capabilities("qwen") returns EXACTLY eight contract groups."""
     manifest = get_capabilities("qwen")
-    expected = {"execution", "workspace", "sessions", "extensions", "automation"}
+    expected = {"execution", "workspace", "sessions", "extensions",
+                "automation", "concurrency", "lifecycle", "models"}
     assert set(manifest.keys()) == expected
 
 

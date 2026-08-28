@@ -18,10 +18,10 @@ Contract (GOAL.md Run 027 §1 D4):
 - ``build_aider_env`` ALWAYS returns ``{}`` (aider reads
   ``OPENAI_API_KEY`` itself; the invoke layer falls through to
   ``env=None``).
-- ``get_capabilities("sweagent")`` has EXACTLY the five contract groups
+- ``get_capabilities("sweagent")`` has EXACTLY eight contract groups
   with extensions ``{..., repo_task_agent: True}`` (the SPECIALIZED
   repo-task capability, ROADMAP §3).
-- ``get_capabilities("aider")`` has EXACTLY the five contract groups
+- ``get_capabilities("aider")`` has EXACTLY eight contract groups
   with extensions ``{..., git_aware: True, patch_output: True}`` (the
   SPECIALIZED git/patch capabilities, ROADMAP §3).
 - The D3 experimental gate: ``build_sweagent_argv`` /
@@ -358,10 +358,11 @@ def test_experimental_gate_refuses_default_cfg_no_env():
 # ── D. manifest shape (extensions — repo_task_agent / git_aware / patch_output) ──
 
 
-def test_sweagent_manifest_has_exactly_five_groups():
-    """get_capabilities('sweagent') returns EXACTLY the five contract groups."""
+def test_sweagent_manifest_has_exactly_eight_groups():
+    """get_capabilities('sweagent') returns EXACTLY eight contract groups."""
     manifest = get_capabilities("sweagent")
-    expected = {"execution", "workspace", "sessions", "extensions", "automation"}
+    expected = {"execution", "workspace", "sessions", "extensions",
+                "automation", "concurrency", "lifecycle", "models"}
     assert set(manifest.keys()) == expected
 
 
@@ -385,10 +386,11 @@ def test_sweagent_manifest_execution_headless_is_true():
     assert manifest["execution"]["interactive"] is False
 
 
-def test_aider_manifest_has_exactly_five_groups():
-    """get_capabilities('aider') returns EXACTLY the five contract groups."""
+def test_aider_manifest_has_exactly_eight_groups():
+    """get_capabilities('aider') returns EXACTLY eight contract groups."""
     manifest = get_capabilities("aider")
-    expected = {"execution", "workspace", "sessions", "extensions", "automation"}
+    expected = {"execution", "workspace", "sessions", "extensions",
+                "automation", "concurrency", "lifecycle", "models"}
     assert set(manifest.keys()) == expected
 
 

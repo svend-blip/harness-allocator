@@ -13,7 +13,7 @@ Contract (GOAL.md Run 026 §1 D1/D2 and the binding constraints):
   ``GOOSE_MODEL`` (verbatim, NOT ``OPENAI_MODEL``), and ``OPENAI_API_KEY``
   (read from the NAMED env var). Empty config + empty model -> empty
   dict (caller inherits parent env).
-- ``get_capabilities("goose")`` has EXACTLY the five groups with
+- ``get_capabilities("goose")`` has EXACTLY eight groups with
   ``sessions.mode == "oneshot"``, ``execution.headless == True``,
   ``automation.non_interactive == True``, and extensions
   ``{skills: True, mcp: True, custom_tools: True}`` (the EXTENSIBLE
@@ -227,10 +227,11 @@ def test_goose_invocation_launch_form():
 # ── C. manifest shape ────────────────────────────────────────────────
 
 
-def test_goose_manifest_has_exactly_five_groups():
-    """get_capabilities("goose") returns EXACTLY the five contract groups."""
+def test_goose_manifest_has_exactly_eight_groups():
+    """get_capabilities("goose") returns EXACTLY eight contract groups."""
     manifest = get_capabilities("goose")
-    expected = {"execution", "workspace", "sessions", "extensions", "automation"}
+    expected = {"execution", "workspace", "sessions", "extensions",
+                "automation", "concurrency", "lifecycle", "models"}
     assert set(manifest.keys()) == expected
 
 
