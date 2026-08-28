@@ -756,3 +756,57 @@ def get_experimental_enabled_harnesses() -> set:
     return out
 
 
+def get_lease_conflict() -> str:
+    """Lease conflict behaviour. Env ``LEASE_CONFLICT``, ini ``[harness]
+    lease_conflict``, or ``"REJECT"``.
+
+    Values: ``"REJECT"`` (default — refuse the second writer) or ``"WAIT"``
+    (block and retry, bounded by ``LEASE_WAIT_TIMEOUT``).  REJECT is the
+    default because the calling chain (BridgeV002) already owns retry logic.
+    """
+    env = os.environ.get("LEASE_CONFLICT")
+    if env and env.strip():
+        return env.strip().upper()
+    configured = _ini("harness", "lease_conflict", fallback="")
+    val = (configured or "").strip().upper()
+    if val and val not in ("REJECT", "WAIT"):
+        raise ValueError(
+            f"unsupported lease_conflict {val!r}; expected 'REJECT' or 'WAIT'"
+        )
+    return val or "REJECT"
+
+
+def get_lease_wait_timeout() -> float:
+    """Maximum seconds to wait for a lease when lease_conflict=WAIT.
+
+    Env ``LEASE_WAIT_TIMEOUT``, ini ``[harness] lease_wait_timeout``, or
+    ``30.0``.
+    """
+    env = os.environ.get("LEASE_WAIT_TIMEOUT")
+    if env:
+        try:
+            return float(env)
+        except ValueError:
+            pass
+    configured = _ini("harness", "lease_wait_timeout", fallback="30.0")
+    try:
+        return float(configured)
+    except ValueError:
+        return 30.0
+
+
+def get_state_dir() -> Path:
+    """State directory for allocator artifacts (lease files, etc.).
+
+    Env ``STATE_DIR``, ini ``[harness] state_dir``, or
+    ``Path(tempfile.gettempdir()) / "harness_allocator"``.
+    """
+    env = os.environ.get("STATE_DIR")
+    if env:
+        return Path(env)
+    configured = _ini("harness", "state_dir")
+    if configured:
+        return Path(configured)
+    return Path(tempfile.gettempdir()) / "harness_allocator"
+
+

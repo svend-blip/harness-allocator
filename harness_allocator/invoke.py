@@ -102,7 +102,8 @@ def _reset_child_signal_handlers():
 def execute(role="", harness=None, model_target="", cwd=None, task="", cfg=None,
             timeout=None, request_id="", heartbeat_interval=None, on_event=None,
             cancel_event=None, cancel_callback=None,
-            cancel_grace_seconds=CANCEL_GRACE_SECONDS) -> dict:
+            cancel_grace_seconds=CANCEL_GRACE_SECONDS,
+            mode="READ_ONLY", workspace=None) -> dict:
     """Run ``task`` through ``harness`` and return the contract result.
 
     ``model_target`` is the already-resolved target; it is never resolved or
@@ -115,93 +116,113 @@ def execute(role="", harness=None, model_target="", cwd=None, task="", cfg=None,
     ``cancel_event`` and ``cancel_callback`` are optional cooperative hooks
     used by the persistent terminal to stop this invocation on Ctrl+C.
     ``cfg`` is injectable for tests.
+    ``mode`` controls workspace write-leasing (default ``READ_ONLY`` — no
+    lease operations).  ``workspace`` overrides ``cwd`` as the lease scope
+    when a write lease is acquired.
 
     The full ``task`` (any size, any number of embedded newlines) is delivered
     to the harness as exactly one subprocess argv element and produces
     exactly one harness invocation.
     """
-    start = _time.monotonic()
-    if heartbeat_interval is None:
-        heartbeat_interval = DEFAULT_HEARTBEAT_INTERVAL
-
-    harness_key = (harness or "").strip() or resolve_harness(role)
-    role_key = resolve_role_key(role)
-    mt_identity = model_target_identity(model_target)
-    rid = (request_id or "").strip() or make_request_id()
-    ident = compute_identity(rid, task)
-
-    base = {
-        "request_id": rid,
-        "harness": harness_key,
-        "role": role_key,
-        "model_target": mt_identity,
-        "payload_chars": ident.chars,
-        "payload_lines": ident.lines,
-        "payload_sha256": ident.sha256,
-    }
-
+    lease_workspace = workspace or (cwd or os.getcwd())
+    lease = None
+    lease_acquired = False
     try:
-        argv = build_task_argv(harness_key, model_target=model_target, task=task, cfg=cfg)
-        # Env wiring (D3 — Run 022 / HA-2 / D3 — Run 026 / HA-3 /
-        # D3 — Run 027 / HA-4): the qwen child env is
-        # {**parent_env, **build_qwen_env(...)}; the goose child env is
-        # {**parent_env, **build_goose_env(...)}; the sweagent child env
-        # ALWAYS carries the three SWE_AGENT_*_DIR values (load-bearing —
-        # the bare CLI asserts on CONFIG_DIR.is_dir() — D1 / D3 contract);
-        # the aider child env is the empty dict (aider inherits the parent
-        # env — no load-bearing override exists for aider). All four share
-        # the "empty dict -> env=None (inherit)" fallback so the existing
-        # harness facade stays byte-identical.
-        if harness_key == "qwen":
-            qwen_env = build_qwen_env(model_target=model_target, cfg=cfg)
-            env = {**os.environ, **qwen_env} if qwen_env else None
-        elif harness_key == "goose":
-            goose_env = build_goose_env(model_target=model_target, cfg=cfg)
-            env = {**os.environ, **goose_env} if goose_env else None
-        elif harness_key == "sweagent":
-            # sweagent env is ALWAYS non-empty (the three SWE_AGENT_*_DIR
-            # keys — adapter.build_sweagent_env never returns an empty
-            # dict), so env threads unconditionally (no empty-dict fallback).
-            sweagent_env = build_sweagent_env(model_target=model_target, cfg=cfg)
-            env = {**os.environ, **sweagent_env}
-        elif harness_key == "aider":
-            # aider env returns {} (the empty-dict fallback — adapter
-            # comment explains why: model is a CLI flag, key inherits).
-            aider_env = build_aider_env(model_target=model_target, cfg=cfg)
-            env = {**os.environ, **aider_env} if aider_env else None
-        elif harness_key == "crush":
-            # crush env is the qwen/goose empty-dict fallback
-            # (adapter.build_crush_env returns {} when nothing is wired
-            # — base_url empty AND api_key_env empty/named-var unset).
-            # crush is a SUPPORTED chat-style harness (Run 028 / HA-5),
-            # not experimental — no _require_experimental_enabled gate.
-            crush_env = build_crush_env(model_target=model_target, cfg=cfg)
-            env = {**os.environ, **crush_env} if crush_env else None
-        else:
-            env = None
-        proc_result = run_argv(
-            argv,
-            cwd=cwd or os.getcwd(),
-            timeout=timeout,
-            heartbeat_interval=heartbeat_interval,
-            on_event=on_event,
-            event_context=dict(base),
-            cancel_event=cancel_event,
-            cancel_callback=cancel_callback,
-            cancel_grace_seconds=cancel_grace_seconds,
-            env=env,
-        )
-        return {**base, **proc_result}
-    except Exception as exc:  # noqa: BLE001 — the contract reports, never raises
-        elapsed = _time.monotonic() - start
-        return {
-            **base,
-            "status": ERROR,
-            "output": "",
-            "error": str(exc),
-            "elapsed": elapsed,
-            "pid": None,
+        from harness_allocator.lease import acquire as _lease_acquire, release as _lease_release
+        if mode in ("WORKSPACE_WRITE", "FULL_ACCESS"):
+            lease_acquired = True
+            lease = _lease_acquire(
+                workspace=lease_workspace,
+                request_id=(request_id or "").strip() or make_request_id(),
+                role=resolve_role_key(role),
+                harness=(harness or "").strip() if harness else None,
+                mode=mode,
+            )
+        start = _time.monotonic()
+        if heartbeat_interval is None:
+            heartbeat_interval = DEFAULT_HEARTBEAT_INTERVAL
+
+        harness_key = (harness or "").strip() or resolve_harness(role)
+        role_key = resolve_role_key(role)
+        mt_identity = model_target_identity(model_target)
+        rid = (request_id or "").strip() or make_request_id()
+        ident = compute_identity(rid, task)
+
+        base = {
+            "request_id": rid,
+            "harness": harness_key,
+            "role": role_key,
+            "model_target": mt_identity,
+            "payload_chars": ident.chars,
+            "payload_lines": ident.lines,
+            "payload_sha256": ident.sha256,
         }
+
+        try:
+            argv = build_task_argv(harness_key, model_target=model_target, task=task, cfg=cfg)
+            # Env wiring (D3 — Run 022 / HA-2 / D3 — Run 026 / HA-3 /
+            # D3 — Run 027 / HA-4): the qwen child env is
+            # {**parent_env, **build_qwen_env(...)}; the goose child env is
+            # {**parent_env, **build_goose_env(...)}; the sweagent child env
+            # ALWAYS carries the three SWE_AGENT_*_DIR values (load-bearing —
+            # the bare CLI asserts on CONFIG_DIR.is_dir() — D1 / D3 contract);
+            # the aider child env is the empty dict (aider inherits the parent
+            # env — no load-bearing override exists for aider). All four share
+            # the "empty dict -> env=None (inherit)" fallback so the existing
+            # harness facade stays byte-identical.
+            if harness_key == "qwen":
+                qwen_env = build_qwen_env(model_target=model_target, cfg=cfg)
+                env = {**os.environ, **qwen_env} if qwen_env else None
+            elif harness_key == "goose":
+                goose_env = build_goose_env(model_target=model_target, cfg=cfg)
+                env = {**os.environ, **goose_env} if goose_env else None
+            elif harness_key == "sweagent":
+                # sweagent env is ALWAYS non-empty (the three SWE_AGENT_*_DIR
+                # keys — adapter.build_sweagent_env never returns an empty
+                # dict), so env threads unconditionally (no empty-dict fallback).
+                sweagent_env = build_sweagent_env(model_target=model_target, cfg=cfg)
+                env = {**os.environ, **sweagent_env}
+            elif harness_key == "aider":
+                # aider env returns {} (the empty-dict fallback — adapter
+                # comment explains why: model is a CLI flag, key inherits).
+                aider_env = build_aider_env(model_target=model_target, cfg=cfg)
+                env = {**os.environ, **aider_env} if aider_env else None
+            elif harness_key == "crush":
+                # crush env is the qwen/goose empty-dict fallback
+                # (adapter.build_crush_env returns {} when nothing is wired
+                # — base_url empty AND api_key_env empty/named-var unset).
+                # crush is a SUPPORTED chat-style harness (Run 028 / HA-5),
+                # not experimental — no _require_experimental_enabled gate.
+                crush_env = build_crush_env(model_target=model_target, cfg=cfg)
+                env = {**os.environ, **crush_env} if crush_env else None
+            else:
+                env = None
+            proc_result = run_argv(
+                argv,
+                cwd=cwd or os.getcwd(),
+                timeout=timeout,
+                heartbeat_interval=heartbeat_interval,
+                on_event=on_event,
+                event_context=dict(base),
+                cancel_event=cancel_event,
+                cancel_callback=cancel_callback,
+                cancel_grace_seconds=cancel_grace_seconds,
+                env=env,
+            )
+            return {**base, **proc_result}
+        except Exception as exc:  # noqa: BLE001 — the contract reports, never raises
+            elapsed = _time.monotonic() - start
+            return {
+                **base,
+                "status": ERROR,
+                "output": "",
+                "error": str(exc),
+                "elapsed": elapsed,
+                "pid": None,
+            }
+    finally:
+        if lease_acquired and lease is not None:
+            _lease_release(lease)
 
 
 def run_argv(argv, *, cwd, timeout=None, heartbeat_interval=15.0,
@@ -381,7 +402,7 @@ def run_command(command, *, cwd, timeout=None, heartbeat_interval=15.0,
 
 
 
-def execute_spec(spec, cfg=None):
+def execute_spec(spec, cfg=None, mode="READ_ONLY", workspace=None):
     """Run ``spec`` through ``execute``'s existing adapter path and return a
     :class:`HarnessRunResult`.
 
@@ -425,96 +446,112 @@ def execute_spec(spec, cfg=None):
        ``timing.finished_at`` are float POSIX seconds captured via
        :func:`time.time` around the ``run_argv`` call.
 
-    Stdlib only — no new third-party imports.
-    """
-    # (1) Validate first; typed errors propagate BEFORE any subprocess.
-    spec.validate()
-
-    harness_key = (spec.harness or "").strip()
-
-    # (2) Build the one-shot argv via the EXISTING adapter path. Resident
-    #     TUIs (codex/claude-code/opencode) raise ValueError from
-    #     build_task_argv; we catch and re-raise as LargeInputRefusedError
-    #     (the typed non-interactive / large-paste refusal — TG7 / D4).
+     Stdlib only — no new third-party imports.
+     """
+    lease = None
     try:
-        argv = build_task_argv(
-            harness_key,
-            model_target=spec.model_reference,
-            task=spec.prompt,
-            cfg=cfg,
+        from harness_allocator.lease import acquire as _lease_acquire, release as _lease_release
+
+        # (1) Validate first; typed errors propagate BEFORE any subprocess.
+        spec.validate()
+
+        harness_key = (spec.harness or "").strip()
+        lease_workspace = workspace or (spec.working_directory or os.getcwd())
+        if mode in ("WORKSPACE_WRITE", "FULL_ACCESS"):
+            lease = _lease_acquire(
+                workspace=lease_workspace,
+                request_id=(spec.request_id or "").strip() or make_request_id(),
+                role=resolve_role_key(spec.role) if hasattr(spec, 'role') and spec.role else "unknown",
+                harness=harness_key,
+                mode=mode,
+            )
+
+        # (2) Build the one-shot argv via the EXISTING adapter path. Resident
+        #     TUIs (codex/claude-code/opencode) raise ValueError from
+        #     build_task_argv; we catch and re-raise as LargeInputRefusedError
+        #     (the typed non-interactive / large-paste refusal — TG7 / D4).
+        try:
+            argv = build_task_argv(
+                harness_key,
+                model_target=spec.model_reference,
+                task=spec.prompt,
+                cfg=cfg,
+            )
+        except ValueError as exc:
+            # Resident TUIs have no one-shot form; refuse with the typed error.
+            if "no one-shot task invocation" in str(exc):
+                raise LargeInputRefusedError(
+                    f"harness {harness_key!r} has no non-interactive one-shot "
+                    f"form; large-paste input is refused for resident TUIs "
+                    f"({exc})"
+                ) from exc
+            raise
+
+        # (3) Run it via the existing run_argv path. capture wall-clock time
+        #     around the call for timing.started_at/finished_at. The qwen
+        #     child env threads {**parent_env, **build_qwen_env(...)}; the
+        #     goose child env threads {**parent_env, **build_goose_env(...)};
+        #     the sweagent child env ALWAYS threads the three SWE_AGENT_*_DIR
+        #     values; the aider child env falls through to None (aider
+        #     inherits the parent env). Non-qwen / non-goose / non-sweagent /
+        #     non-aider specs pass env=None (inherit) and stay byte-identical
+        #     to the existing four-harness facade
+        #     (D3 — Run 022 / HA-2; D3 — Run 026 / HA-3; D3 — Run 027 / HA-4).
+        cwd = spec.working_directory or os.getcwd()
+        if harness_key == "qwen":
+            qwen_env = build_qwen_env(model_target=spec.model_reference, cfg=cfg)
+            env = {**os.environ, **qwen_env} if qwen_env else None
+        elif harness_key == "goose":
+            goose_env = build_goose_env(model_target=spec.model_reference, cfg=cfg)
+            env = {**os.environ, **goose_env} if goose_env else None
+        elif harness_key == "sweagent":
+            # sweagent env is ALWAYS non-empty (the three SWE_AGENT_*_DIR
+            # keys — adapter.build_sweagent_env never returns an empty dict).
+            sweagent_env = build_sweagent_env(model_target=spec.model_reference, cfg=cfg)
+            env = {**os.environ, **sweagent_env}
+        elif harness_key == "aider":
+            # aider env returns {} (empty-dict fallback — adapter comment
+            # explains: model is a CLI flag, key inherits).
+            aider_env = build_aider_env(model_target=spec.model_reference, cfg=cfg)
+            env = {**os.environ, **aider_env} if aider_env else None
+        elif harness_key == "crush":
+            # crush env threads {**parent_env, **build_crush_env(...)} with
+            # the qwen/goose empty-dict fallback (Run 028 / HA-5 — chat-style
+            # supported harness, base_url configured via crushrc not env,
+            # OPENAI_API_KEY read from a NAMED env var).
+            crush_env = build_crush_env(model_target=spec.model_reference, cfg=cfg)
+            env = {**os.environ, **crush_env} if crush_env else None
+        else:
+            env = None
+        started_at = _time.time()
+        proc = run_argv(
+            argv,
+            cwd=cwd,
+            timeout=spec.timeout,
+            env=env,
         )
-    except ValueError as exc:
-        # Resident TUIs have no one-shot form; refuse with the typed error.
-        if "no one-shot task invocation" in str(exc):
-            raise LargeInputRefusedError(
-                f"harness {harness_key!r} has no non-interactive one-shot "
-                f"form; large-paste input is refused for resident TUIs "
-                f"({exc})"
-            ) from exc
-        raise
+        finished_at = _time.time()
 
-    # (3) Run it via the existing run_argv path. capture wall-clock time
-    #     around the call for timing.started_at/finished_at. The qwen
-    #     child env threads {**parent_env, **build_qwen_env(...)}; the
-    #     goose child env threads {**parent_env, **build_goose_env(...)};
-    #     the sweagent child env ALWAYS threads the three SWE_AGENT_*_DIR
-    #     values; the aider child env falls through to None (aider
-    #     inherits the parent env). Non-qwen / non-goose / non-sweagent /
-    #     non-aider specs pass env=None (inherit) and stay byte-identical
-    #     to the existing four-harness facade
-    #     (D3 — Run 022 / HA-2; D3 — Run 026 / HA-3; D3 — Run 027 / HA-4).
-    cwd = spec.working_directory or os.getcwd()
-    if harness_key == "qwen":
-        qwen_env = build_qwen_env(model_target=spec.model_reference, cfg=cfg)
-        env = {**os.environ, **qwen_env} if qwen_env else None
-    elif harness_key == "goose":
-        goose_env = build_goose_env(model_target=spec.model_reference, cfg=cfg)
-        env = {**os.environ, **goose_env} if goose_env else None
-    elif harness_key == "sweagent":
-        # sweagent env is ALWAYS non-empty (the three SWE_AGENT_*_DIR
-        # keys — adapter.build_sweagent_env never returns an empty dict).
-        sweagent_env = build_sweagent_env(model_target=spec.model_reference, cfg=cfg)
-        env = {**os.environ, **sweagent_env}
-    elif harness_key == "aider":
-        # aider env returns {} (empty-dict fallback — adapter comment
-        # explains: model is a CLI flag, key inherits).
-        aider_env = build_aider_env(model_target=spec.model_reference, cfg=cfg)
-        env = {**os.environ, **aider_env} if aider_env else None
-    elif harness_key == "crush":
-        # crush env threads {**parent_env, **build_crush_env(...)} with
-        # the qwen/goose empty-dict fallback (Run 028 / HA-5 — chat-style
-        # supported harness, base_url configured via crushrc not env,
-        # OPENAI_API_KEY read from a NAMED env var).
-        crush_env = build_crush_env(model_target=spec.model_reference, cfg=cfg)
-        env = {**os.environ, **crush_env} if crush_env else None
-    else:
-        env = None
-    started_at = _time.time()
-    proc = run_argv(
-        argv,
-        cwd=cwd,
-        timeout=spec.timeout,
-        env=env,
-    )
-    finished_at = _time.time()
+        # (4) Fill and return HarnessRunResult with the BOUND exit_code
+        #     semantics: 0 on SUCCESS, None otherwise. run_argv does not
+        #     expose the child return code, so we MUST NOT fabricate a real
+        #     nonzero value.
+        status = proc.get("status", ERROR)
+        exit_code = 0 if status == SUCCESS else None
 
-    # (4) Fill and return HarnessRunResult with the BOUND exit_code
-    #     semantics: 0 on SUCCESS, None otherwise. run_argv does not
-    #     expose the child return code, so we MUST NOT fabricate a real
-    #     nonzero value.
-    status = proc.get("status", ERROR)
-    exit_code = 0 if status == SUCCESS else None
-
-    return HarnessRunResult(
-        request_id=(spec.request_id or "").strip() or make_request_id(),
-        harness=harness_key,
-        status=status,
-        exit_code=exit_code,
-        session_id=(spec.session.session_id or "").strip() or None,
-        stdout=proc.get("output", ""),
-        stderr=proc.get("error", ""),
-        artifacts=list(spec.output.expected_artifacts),
-        evidence=RunEvidence(),
-        usage=RunUsage(),
-        timing=RunTiming(started_at=started_at, finished_at=finished_at),
-    )
+        return HarnessRunResult(
+            request_id=(spec.request_id or "").strip() or make_request_id(),
+            harness=harness_key,
+            status=status,
+            exit_code=exit_code,
+            session_id=(spec.session.session_id or "").strip() or None,
+            stdout=proc.get("output", ""),
+            stderr=proc.get("error", ""),
+            artifacts=list(spec.output.expected_artifacts),
+            evidence=RunEvidence(),
+            usage=RunUsage(),
+            timing=RunTiming(started_at=started_at, finished_at=finished_at),
+        )
+    finally:
+        if lease is not None:
+            _lease_release(lease)
