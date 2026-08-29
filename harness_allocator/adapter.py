@@ -756,6 +756,7 @@ def build_whip_invocation(model_target=None, task=None, cfg=None) -> str:
 
     The stop file lives at ``<workdir>/.whip_stop``.
     """
+    _require_experimental_enabled("whip", cfg)
     workdir = cfg.get("workdir", ".") if cfg else "."
     stop_file = os.path.join(workdir, ".whip_stop")
     return f"whip --json --mode task --stop {stop_file} {workdir}"
@@ -768,6 +769,7 @@ def build_whip_argv(model_target=None, task=None, cfg=None) -> list:
     for safe, exact subprocess execution. Mirrors the ``invocation`` form:
     ``--json --mode task --stop <stop_file> <workdir>``.
     """
+    _require_experimental_enabled("whip", cfg)
     workdir = cfg.get("workdir", ".") if cfg else "."
     stop_file = os.path.join(workdir, ".whip_stop")
     return ["whip", "--json", "--mode", "task", "--stop", stop_file, workdir]
@@ -781,6 +783,7 @@ def build_whip_env(model_target=None, cfg=None) -> dict:
     user's environment already provides — return an empty dict so
     the invoke layer falls through to inheriting the parent env.
     """
+    _require_experimental_enabled("whip", cfg)
     return {}
 
 
