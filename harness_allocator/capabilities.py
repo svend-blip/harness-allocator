@@ -731,6 +731,60 @@ _MANIFEST_CRUSH = {
 }
 
 
+# whip — openai-compatible LLM adapter invoked via whip v0.4.0 binary.
+# Uses -cautious mode (interactive, not read-only enforcement), adapts
+# to the user's current workspace scope, and is launched headless via
+# stdin prompt injection through the whip adapter interface. Whip selects
+# models from its own config (no runtime model swapping), communicates
+# via the openai /api/chat/completions endpoint, resolves its model from
+# whip config (never hardcoded), and stores API keys via env indirection
+# (apiKeyEnv in whip config, never on disk). Capabilities marked UNKNOWN
+# require verification against the pinned v0.4.0 binary by D4 tests;
+# UNSUPPORTED where the binary architecture precludes the capability.
+_MANIFEST_WHIP = {
+    "execution": {
+        "terminal": True,
+        "headless": True,
+        "interactive": False,
+    },
+    "workspace": {
+        "read_only": False,
+        "workspace_write": True,
+        "full_access": False,
+    },
+    "sessions": {
+        "persistent_session": False,
+        "session_resume": False,
+        "mode": "oneshot",
+    },
+    "extensions": {
+        "skills": False,
+        "mcp": False,
+        "custom_tools": False,
+        "repo_task_agent": False,
+        "git_aware": False,
+        "patch_output": False,
+    },
+    "automation": {
+        "non_interactive": True,
+        "deterministic_exit": True,
+        "interrupt_safe": True,
+    },
+    "concurrency": {
+        "parallel_readers": True,
+        "exclusive_workspace_writer": False,
+    },
+    "lifecycle": {
+        "interrupt_current_task": True,
+        "resumable_session": False,
+        "child_process_cleanup": False,
+    },
+    "models": {
+        "openai_compatible_endpoint": True,
+    },
+}
+
+
 #: The set of harness keys that ``get_capabilities`` accepts.
 SUPPORTED_HARNESSES = ("codex", "claude-code", "opencode", "dsh", "qwen", "goose", "crush")
 
@@ -739,7 +793,7 @@ SUPPORTED_HARNESSES = ("codex", "claude-code", "opencode", "dsh", "qwen", "goose
 #: ``config.get_experimental_enabled_harnesses()``; an empty enable-set
 #: refuses both build_*_argv calls with a typed ValueError BEFORE any
 #: subprocess. (Run 027 / HA-4 §1 D3 — the D3 experimental gate.)
-EXPERIMENTAL_HARNESSES = ("sweagent", "aider")
+EXPERIMENTAL_HARNESSES = ("sweagent", "aider", "whip")
 
 #: Normalized capability value vocabulary used throughout the capability
 #: model. Every capability value assigned to a manifest section must come
@@ -757,7 +811,7 @@ def get_capabilities(harness) -> dict:
 
     Raises :class:`UnknownHarnessError` (a :class:`ValueError` subclass) when
     ``harness`` is not one of ``codex``, ``claude-code``, ``opencode``,
-    ``dsh``, ``qwen``, ``goose``, ``crush``, ``sweagent``, ``aider``. The
+    ``dsh``, ``qwen``, ``goose``, ``crush``, ``sweagent``, ``aider``, ``whip``. The
     error message names the unknown harness.
     """
     if harness == "codex":
@@ -859,5 +913,16 @@ def get_capabilities(harness) -> dict:
             "concurrency": dict(_MANIFEST_CRUSH["concurrency"]),
             "lifecycle": dict(_MANIFEST_CRUSH["lifecycle"]),
             "models": dict(_MANIFEST_CRUSH["models"]),
+        }
+    if harness == "whip":
+        return {
+            "execution": dict(_MANIFEST_WHIP["execution"]),
+            "workspace": dict(_MANIFEST_WHIP["workspace"]),
+            "sessions": dict(_MANIFEST_WHIP["sessions"]),
+            "extensions": dict(_MANIFEST_WHIP["extensions"]),
+            "automation": dict(_MANIFEST_WHIP["automation"]),
+            "concurrency": dict(_MANIFEST_WHIP["concurrency"]),
+            "lifecycle": dict(_MANIFEST_WHIP["lifecycle"]),
+            "models": dict(_MANIFEST_WHIP["models"]),
         }
     raise UnknownHarnessError(f"unknown harness: {harness!r}")

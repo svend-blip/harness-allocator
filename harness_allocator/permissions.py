@@ -21,6 +21,7 @@ from harness_allocator.capabilities import (
     _MANIFEST_CRUSH,
     _MANIFEST_SWEAGENT,
     _MANIFEST_AIDER,
+    _MANIFEST_WHIP,
 )
 
 
@@ -52,6 +53,7 @@ _MANIFEST_BY_HARNESS: dict[str, dict] = {
     "crush": _MANIFEST_CRUSH,
     "sweagent": _MANIFEST_SWEAGENT,
     "aider": _MANIFEST_AIDER,
+    "whip": _MANIFEST_WHIP,
 }
 
 

@@ -161,7 +161,7 @@ _LAUNCH_SPEC_SUPPORTED = {
 }
 
 
-#: LaunchSpec table for the TWO experimental harnesses (sweagent, aider).
+#: LaunchSpec table for the THREE experimental harnesses (sweagent, aider, whip).
 #: Same key set; values grounded in adapter.py / chain_watchdog.py.
 _LAUNCH_SPEC_EXPERIMENTAL = {
     "sweagent": {
@@ -176,6 +176,13 @@ _LAUNCH_SPEC_EXPERIMENTAL = {
         "activity_markers": list(_ACTIVITY_MARKERS),
     },
     "aider": {
+        "mode": "one_shot",
+        "needs_initial_prompt": False,
+        "anchor": "none",
+        "required_env": [],
+        "activity_markers": list(_ACTIVITY_MARKERS),
+    },
+    "whip": {
         "mode": "one_shot",
         "needs_initial_prompt": False,
         "anchor": "none",
@@ -359,7 +366,7 @@ _STOP_SPEC_SUPPORTED = {
 }
 
 
-#: StopSpec table for the TWO experimental harnesses (sweagent, aider).
+#: StopSpec table for the THREE experimental harnesses (sweagent, aider, whip).
 #: Same key set; values grounded in invoke.py / chain_watchdog.py.
 _STOP_SPEC_EXPERIMENTAL = {
     "sweagent": {
@@ -369,6 +376,12 @@ _STOP_SPEC_EXPERIMENTAL = {
         "verify": "pid_gone",
     },
     "aider": {
+        # LaunchSpec.mode = "one_shot" → invoke ladder, 1 s grace.
+        "signals": ["SIGINT", "SIGTERM", "SIGKILL"],
+        "grace_seconds": 1,
+        "verify": "pid_gone",
+    },
+    "whip": {
         # LaunchSpec.mode = "one_shot" → invoke ladder, 1 s grace.
         "signals": ["SIGINT", "SIGTERM", "SIGKILL"],
         "grace_seconds": 1,
