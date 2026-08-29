@@ -23,6 +23,7 @@ Two equivalent surfaces are exposed for each native harness:
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import shlex
 
 from . import config
@@ -743,6 +744,44 @@ def build_crush_env(model_target=None, cfg=None) -> dict:
         if key:
             env["OPENAI_API_KEY"] = key
     return env
+
+
+def build_whip_invocation(model_target=None, task=None, cfg=None) -> str:
+    """The shell command that starts a native Whip invocation.
+
+    Uses ``--json`` for structured output, ``--mode task`` for
+    task-solving mode, and ``--stop`` with a stop-file path so that
+    writing to the file triggers whip's internal signal handler for
+    graceful shutdown.
+
+    The stop file lives at ``<workdir>/.whip_stop``.
+    """
+    workdir = cfg.get("workdir", ".") if cfg else "."
+    stop_file = os.path.join(workdir, ".whip_stop")
+    return f"whip --json --mode task --stop {stop_file} {workdir}"
+
+
+def build_whip_argv(model_target=None, task=None, cfg=None) -> list:
+    """The argv list that starts a native Whip invocation via subprocess.
+
+    Avoids shell interpretation; used by :func:`~harness_allocator.invoke.execute`
+    for safe, exact subprocess execution. Mirrors the ``invocation`` form:
+    ``--json --mode task --stop <stop_file> <workdir>``.
+    """
+    workdir = cfg.get("workdir", ".") if cfg else "."
+    stop_file = os.path.join(workdir, ".whip_stop")
+    return ["whip", "--json", "--mode", "task", "--stop", stop_file, workdir]
+
+
+def build_whip_env(model_target=None, cfg=None) -> dict:
+    """The child-env override dict for a Whip invocation.
+
+    Whip reads its config from ``~/.whip/config.json`` (v0.4.0+).
+    No special environment variables are required beyond what the
+    user's environment already provides — return an empty dict so
+    the invoke layer falls through to inheriting the parent env.
+    """
+    return {}
 
 
 

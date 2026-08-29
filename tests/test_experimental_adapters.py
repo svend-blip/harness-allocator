@@ -423,8 +423,8 @@ def test_aider_manifest_automation_non_interactive_is_true():
 
 
 def test_experimental_harnesses_lists_sweagent_and_aider():
-    """EXPERIMENTAL_HARNESSES is exactly (sweagent, aider) — the D3 registered set."""
-    assert EXPERIMENTAL_HARNESSES == ("sweagent", "aider")
+    """EXPERIMENTAL_HARNESSES is exactly (sweagent, aider, whip) — the D3 registered set."""
+    assert EXPERIMENTAL_HARNESSES == ("sweagent", "aider", "whip")
 
 
 def test_supported_harnesses_does_not_include_experimental_keys():
