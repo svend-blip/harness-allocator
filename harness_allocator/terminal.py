@@ -38,8 +38,10 @@ from .definition import model_target_identity
 from .invoke import execute
 from .status import (
     CANCELLED,
+    CLEANUP,
     DUPLICATE_REQUEST,
     ERROR,
+    INTERRUPTING,
     NOT_CONFIGURED,
     READY,
     RUNNING,
@@ -108,6 +110,8 @@ def render_banner(role, harness_key, model_target, cwd, flow="", status_info=Non
         f"Bridge/flows: {status_value(info, 'bridge_dir', NOT_CONFIGURED)} "
         f"({status_value(info, 'bridge_dir_access', UNKNOWN, ('writable', 'read-only', UNKNOWN))})",
         f"MCP-Light: {status_value(info, 'mcp_light', NOT_CONFIGURED, MCP_LIGHT_STATES)}",
+        f"Permission: {status_value(info, 'permission', UNKNOWN, ('read-only', 'workspace-write', 'full-access', UNKNOWN))}",
+        f"Request ID: {status_value(info, 'request_id', UNKNOWN)}",
     ]
     return "\n".join(lines)
 

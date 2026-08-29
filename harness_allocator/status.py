@@ -17,6 +17,8 @@ SUCCESS = "SUCCESS"
 ERROR = "ERROR"
 DUPLICATE_REQUEST = "DUPLICATE_REQUEST"
 CANCELLED = "CANCELLED"
+INTERRUPTING = "INTERRUPTING"
+CLEANUP = "CLEANUP"
 
 # The status banner uses these values when a caller has not supplied a
 # configuration/runtime value.  Keep them explicit so an absent value is never
