@@ -19,10 +19,14 @@ constraints):
 - ``build_simple_harness_invocation`` matches the shlex-joined argv
   (mirror every other adapter).
 - ``build_simple_harness_env`` carries ``SIMPLE_HARNESS_API_KEY`` (read
-  from the NAMED env var) when wired; empty when nothing is wired (the
-  qwen / goose / crush contract). The model is NOT in env (it's a CLI
-  flag). The base URL is NOT in env (it's a CLI flag, opposite to
-  qwen / goose / crush which use OPENAI_BASE_URL).
+  from the NAMED env var) when wired, plus ``SIMPLE_HARNESS_BASE_URL``
+  (/v1-forced) and ``SIMPLE_HARNESS_MODEL`` when configured — the LAUNCH
+  form of the argv builder is the interactive session with no argv
+  endpoint surface, so env is how the resolved endpoint reaches it
+  (2026-08-30 alignment). Empty when nothing is wired.
+- ``build_simple_harness_argv`` with ``task=None`` returns the LAUNCH
+  form: ``[bin, --workspace, <dir>?]`` — no ``run``, no permission/output
+  flags, no prompt file.
 - ``get_capabilities("simple-harness")`` has EXACTLY eight contract
   groups with ``sessions.mode == "fresh"``, ``execution.headless == True``,
   ``automation.non_interactive == True``, and extensions with EXACTLY
@@ -409,22 +413,59 @@ def test_simple_harness_invocation_matches_argv_joined():
 # --- B. env builder (build_simple_harness_env) --------------------------------
 
 
+class _NothingCfg(_SimpleHarnessCfg):
+    """Cfg variant with nothing wired at all (empty base_url, no key)."""
+
+    def get_simple_harness_base_url(self):
+        return ""
+
+
 def test_simple_harness_env_empty_when_nothing_configured():
-    """Empty config + empty model_target -> empty dict (caller inherits parent env)."""
-    env = build_simple_harness_env(model_target="", cfg=_SimpleHarnessCfg())
+    """Nothing wired -> empty dict (caller inherits parent env)."""
+    env = build_simple_harness_env(model_target="", cfg=_NothingCfg())
     assert env == {}
 
 
-def test_simple_harness_env_empty_when_model_target_only():
-    """model_target is accepted for call-shape parity but NOT used in env.
+def test_simple_harness_env_threads_base_url_and_model():
+    """The env carries the /v1-forced base URL and the model when configured.
 
-    Unlike qwen / goose, simple-harness takes the model as a CLI flag
-    (``--model <model>`` set by build_simple_harness_argv), NOT env.
+    The LAUNCH form (task=None) is the interactive session with no argv
+    endpoint surface, so env is the only way a resolved endpoint reaches
+    it (2026-08-30 alignment). In the one-shot form the argv flags win
+    per the harness's precedence chain, so these are redundant there but
+    never wrong.
     """
     env = build_simple_harness_env(
         model_target="qwen3-coder-30b-32k:latest", cfg=_SimpleHarnessCfg()
     )
-    assert env == {}
+    assert env["SIMPLE_HARNESS_BASE_URL"] == "http://localhost:11434/v1"
+    assert env["SIMPLE_HARNESS_MODEL"] == "qwen3-coder-30b-32k:latest"
+
+
+def test_simple_harness_argv_launch_form_is_interactive():
+    """task=None -> the interactive LAUNCH form: [bin], no run/flags/prompt."""
+    argv = build_simple_harness_argv(
+        model_target="qwen3-coder-30b-32k:latest", task=None,
+        cfg=_SimpleHarnessCfg(),
+    )
+    assert argv == ["simple-harness"]
+
+
+def test_simple_harness_argv_launch_form_carries_workspace():
+    """task=None with a configured workdir -> [bin, --workspace, <dir>]."""
+    argv = build_simple_harness_argv(
+        model_target="m", task=None, cfg=_SimpleHarnessCfgFull(),
+    )
+    assert argv == ["simple-harness", "--workspace", "/tmp/simple-harness-work"]
+
+
+def test_simple_harness_argv_launch_form_still_refuses_empty_bin():
+    """The missing-binary refusal applies to the LAUNCH form too."""
+    try:
+        build_simple_harness_argv(model_target="m", task=None, cfg=_EmptyBinCfg())
+        assert False, "expected ValueError"
+    except ValueError as exc:
+        assert "simple-harness" in str(exc)
 
 
 def test_simple_harness_env_api_key_read_from_named_env_var(monkeypatch):

@@ -782,8 +782,18 @@ def build_simple_harness_invocation(model_target=None, task=None, cfg=None) -> s
 
 
 def build_simple_harness_argv(model_target=None, task=None, cfg=None) -> list:
-    """The headless one-shot simple-harness invocation as an argv list.
+    """The simple-harness invocation as an argv list — two forms.
 
+    **LAUNCH form (``task is None``)** — the interactive session a role
+    pane runs: ``[<simple_harness_bin>, --workspace, <dir>?]``. The
+    endpoint and model travel in the child env
+    (:func:`build_simple_harness_env` threads ``SIMPLE_HARNESS_BASE_URL``
+    / ``SIMPLE_HARNESS_MODEL``), the qwen convention: a resident session
+    has no per-turn argv surface, so argv must not embed a prompt or a
+    one-shot subcommand. Only the bin refusal applies — base-url/model
+    are the env builder's contract in this form.
+
+    **TASK form (``task`` supplied)** — the headless one-shot invocation:
     ``[<simple_harness_bin>, run, --base-url, <url>, --model, <model>,
     --workspace, <dir>?, --permission, read_only, --output, jsonl,
     --prompt-file, <file>, --max-turns, <n>?]``.
@@ -849,6 +859,13 @@ def build_simple_harness_argv(model_target=None, task=None, cfg=None) -> list:
             "simple-harness binary is not configured "
             "(empty SIMPLE_HARNESS_BIN / [simple-harness] bin)"
         )
+    if task is None:
+        # LAUNCH form: interactive session for a resident role pane.
+        # Endpoint/model are the env builder's contract in this form.
+        workdir = (cfg.get_simple_harness_workdir() or "").strip()
+        if workdir:
+            parts += ["--workspace", workdir]
+        return parts
     base_url = (cfg.get_simple_harness_base_url() or "").strip()
     if not base_url:
         # Missing-base-url refusal (SCOPE §28: empty --base-url is exit
@@ -912,22 +929,28 @@ def build_simple_harness_env(model_target=None, cfg=None) -> dict:
     mirrors the qwen / goose / crush "return ``{}`` when nothing is
     wired" contract.
 
-    **Honest boundary:** the BASE URL is NOT threaded via env
-    (``SIMPLE_HARNESS_BASE_URL`` is honoured by the harness but argv
-    ``--base-url`` wins per the precedence chain; the adapter already
-    emits ``--base-url`` so re-threading here would be redundant). The
-    API key, however, has NO argv surface (the harness reads it from
-    ``SIMPLE_HARNESS_API_KEY`` only — verified by reading
-    ``internal/config/config.go`` applyEnv).
-
-    ``model_target`` is accepted for call-shape parity with the other
-    ``build_*_env`` builders and is deliberately NOT used in env —
-    simple-harness takes the model as a CLI flag (``--model <model>``,
-    set by :func:`build_simple_harness_argv`).
+    The BASE URL and MODEL are threaded via env when configured
+    (``SIMPLE_HARNESS_BASE_URL`` /v1-forced, ``SIMPLE_HARNESS_MODEL``
+    from ``model_target``): the LAUNCH form of
+    :func:`build_simple_harness_argv` is the interactive session with no
+    argv endpoint surface, so env is the only way the resolved endpoint
+    reaches it. In the one-shot TASK form the argv ``--base-url`` /
+    ``--model`` win per the harness's precedence chain, so the env values
+    are redundant there but never wrong. The API key has NO argv surface
+    in either form (the harness reads ``SIMPLE_HARNESS_API_KEY`` only —
+    verified by reading ``internal/config/config.go`` applyEnv).
     """
     if cfg is None:
         cfg = config
     env: dict = {}
+    base_url = (cfg.get_simple_harness_base_url() or "").strip()
+    if base_url:
+        if not base_url.endswith("/v1"):
+            base_url = base_url.rstrip("/") + "/v1"
+        env["SIMPLE_HARNESS_BASE_URL"] = base_url
+    model = model_target_identity(model_target)
+    if model:
+        env["SIMPLE_HARNESS_MODEL"] = model
     name = (cfg.get_simple_harness_api_key_env() or "").strip()
     if name:
         import os
