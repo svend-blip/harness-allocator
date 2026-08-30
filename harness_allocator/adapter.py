@@ -831,8 +831,8 @@ def build_simple_harness_argv(model_target=None, task=None, cfg=None) -> list:
       that path; the harness reads the prompt from the file (SCOPE §28
       — missing ``--prompt-file`` is exit code 2; the ``-`` value
       meaning stdin is documented but stdin handling is deferred).
-      The tempfile leaks into ``/tmp`` after the harness exits; a
-      future cleanup hook in invoke.py may reap it.
+      The tempfile is reaped at interpreter exit (atexit) — it must
+      outlive the builder because the subprocess reads it later.
     - ``--max-turns <n>`` — emitted when ``cfg.get_simple_harness_max_turns()
       > 0`` with the configured value; default 8 (per the spec / HARNESS-
       CONTRACT default). ``0`` means "omit the flag".
@@ -894,9 +894,13 @@ def build_simple_harness_argv(model_target=None, task=None, cfg=None) -> list:
     parts += ["--permission", "read_only", "--output", "jsonl"]
     if task:
         # The harness takes the prompt as a file path. Write task to a
-        # tempfile; the harness reads it via --prompt-file. The tempfile
-        # is left on disk after the harness exits (leaks into /tmp) — a
-        # future cleanup hook in invoke.py may reap it.
+        # tempfile; the harness reads it via --prompt-file. The file must
+        # outlive this builder (the subprocess reads it later), so it is
+        # reaped at INTERPRETER exit via atexit — the invoking allocator
+        # process is one-shot, so exit follows the harness promptly. The
+        # previous behaviour left one file in /tmp per invocation, forever
+        # (the leak this docstring used to promise a future fix for).
+        import atexit
         import tempfile
         tmp = tempfile.NamedTemporaryFile(
             mode="w", suffix=".txt", delete=False, prefix="simple_harness_prompt_"
@@ -904,6 +908,14 @@ def build_simple_harness_argv(model_target=None, task=None, cfg=None) -> list:
         tmp.write(task)
         tmp.flush()
         tmp.close()
+
+        def _reap(path=tmp.name):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+        atexit.register(_reap)
         parts += ["--prompt-file", tmp.name]
     max_turns = cfg.get_simple_harness_max_turns()
     if max_turns and max_turns > 0:
