@@ -508,7 +508,9 @@ def get_crush_api_key_env() -> str:
 
 # ── Simple-Harness adapter config (Run 1010 / Objective A) ─────────────
 #
-# simple-harness is the EIGHTH SUPPORTED chat-style harness — the spec at
+# simple-harness is a SUPPORTED chat-style harness (the count is derived
+# from capabilities.SUPPORTED_HARNESSES — prose ordinals drifted three ways
+# before this line stopped carrying one) — the spec at
 # /home/svend/flows/1010/SIMPLE-HARNESS-ADAPTER-SPEC.md. It is launched
 # headless via ``simple-harness run --base-url <url> --model <model>
 # --workspace <dir> --permission <mode> --output jsonl --prompt-file <file>

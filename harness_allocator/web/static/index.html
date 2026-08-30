@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title data-slot="app.title">Harness Allocator</title>
+<link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+<header class="topbar">
+  <h1 data-slot="app.title">Harness Allocator</h1>
+  <div class="lang-selector">
+    <label for="lang-dropdown" class="lang-label" data-slot="lbl.lang">Language</label>
+    <select id="lang-dropdown">
+      <option value="en-US">English</option>
+      <option value="da-DK">Dansk</option>
+    </select>
+  </div>
+</header>
+<main>
+  <section class="panel">
+    <h2 data-slot="section.supported">Harnesses</h2>
+    <table class="harness-table" id="supported-table">
+      <thead><tr>
+        <th data-slot="col.harness">Harness</th>
+        <th data-slot="col.status">Status</th>
+        <th data-slot="col.capabilities">Capabilities</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+  <section class="panel">
+    <h2 data-slot="section.experimental">Experimental</h2>
+    <p class="hint" data-slot="hint.experimental">Registered in the adapter surface but gated — not exposed as defaults.</p>
+    <table class="harness-table" id="experimental-table">
+      <thead><tr>
+        <th data-slot="col.harness">Harness</th>
+        <th data-slot="col.status">Status</th>
+        <th data-slot="col.capabilities">Capabilities</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+</main>
+<script src="/static/js/app.js"></script>
+</body>
+</html>
