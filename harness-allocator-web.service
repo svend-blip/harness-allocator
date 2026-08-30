@@ -1,0 +1,37 @@
+# Harness Allocator web UI (port 9142) — read-only browse frontend.
+#
+# A USER unit, installed to ~/.config/systemd/user/ (the mcp-light pattern:
+# no root, the server runs as the owning user and binds a high port).
+#
+# HARNESS_WEB_HOST=0.0.0.0 is the EXPLICIT decision to reach the UI from
+# other machines (Human, 2026-08-30). The code's default is loopback because
+# the UI has no auth — this line IS the auth boundary decision, so removing
+# it returns the service to loopback-only.
+#
+# Install:
+#   cp harness-allocator-web.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now harness-allocator-web
+#   loginctl enable-linger $USER      # start at boot without logging in
+
+[Unit]
+Description=Harness Allocator web UI (port 9142)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/svend/harness-allocator
+# System python3.12: fastapi/uvicorn are installed system-wide, and the
+# package itself is stdlib-only, importable straight from the working
+# directory — no venv exists or is needed in this repo.
+ExecStart=/usr/bin/python3.12 -m harness_allocator.web
+Environment=HARNESS_WEB_HOST=0.0.0.0
+
+Restart=always
+RestartSec=5
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=default.target
