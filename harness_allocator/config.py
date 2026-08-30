@@ -505,6 +505,136 @@ def get_crush_api_key_env() -> str:
     return configured or ""
 
 
+
+# ── Simple-Harness adapter config (Run 1010 / Objective A) ─────────────
+#
+# simple-harness is the EIGHTH SUPPORTED chat-style harness — the spec at
+# /home/svend/flows/1010/SIMPLE-HARNESS-ADAPTER-SPEC.md. It is launched
+# headless via ``simple-harness run --base-url <url> --model <model>
+# --workspace <dir> --permission <mode> --output jsonl --prompt-file <file>
+# [--max-turns N]`` (per the spec, mirroring the crush/goose adapter shape).
+#
+# The endpoint wiring is argv-based (the ``--base-url`` flag), NOT env-based
+# — unlike qwen / goose / crush. The API key is read by the harness from
+# the ``SIMPLE_HARNESS_API_KEY`` env var (namespaced via the harness's own
+# applyEnv at internal/config/config.go:288). The adapter threads the
+# value of a NAMED env var (a NAME, never the secret) via the child env.
+#
+# Defaults mirror the per-harness pattern: every value has a documented
+# default and an env override, no hardcoded host-absolute paths. The default
+# ``bin = "simple-harness"`` matches the wrapper bin at
+# ``/home/svend/simple-harness/bin/simple-harness`` (a pinned system tool
+# installed via the 1010 chain run 023 handoff 076).
+
+
+def get_simple_harness_bin() -> str:
+    """Simple-harness launcher. Env ``SIMPLE_HARNESS_BIN``, ini ``[simple-harness] bin``, or ``simple-harness``.
+
+    The default is the on-PATH ``simple-harness`` binary — the wrapper
+    installed at ``/home/svend/simple-harness/bin/simple-harness`` (a
+    pinned system tool, the one bound at 1010 / Run 023 / handoff 076).
+    Like the other harnesses, callers can override with a full launcher
+    path via env or ini.
+
+    PATH must carry ``/home/svend/simple-harness/bin`` or the ini must
+    pin the absolute path (``simple_harness_bin = /home/svend/simple-harness/bin/simple-harness``)
+    so a vanilla invocation finds the wrapper. The wrapper itself execs
+    the committed runtime (the contract: bin is the launcher; the
+    runtime is committed under ``/home/svend/simple-harness/``).
+    """
+    env = os.environ.get("SIMPLE_HARNESS_BIN")
+    if env:
+        return env
+    configured = _ini("simple-harness", "bin")
+    return configured or "simple-harness"
+
+
+def get_simple_harness_base_url() -> str:
+    """Simple-harness endpoint base URL. Env ``SIMPLE_HARNESS_BASE_URL``, ini ``[simple-harness] base_url``, or empty.
+
+    Empty (default) means the adapter MUST refuse with a typed
+    ``ValueError`` because ``--base-url`` is required by the harness
+    (SCOPE §28 — empty ``--base-url`` is exit code 2). When non-empty,
+    the adapter forces the value to end in ``/v1`` so it works with any
+    OpenAI-compatible server (the opencode / qwen lesson — local
+    endpoints need the ``/v1`` path).
+
+    The base URL travels via argv (``--base-url <url>``) — NOT via the
+    ``OPENAI_BASE_URL`` env var — because that is how the harness reads
+    it (``SIMPLE_HARNESS_BASE_URL`` env is honoured too, but argv wins
+    per the precedence chain documented in
+    ``/home/svend/simple-harness/internal/config/config.go``).
+    """
+    env = os.environ.get("SIMPLE_HARNESS_BASE_URL")
+    if env:
+        return env
+    configured = _ini("simple-harness", "base_url")
+    return configured or ""
+
+
+def get_simple_harness_api_key_env() -> str:
+    """Name of the environment variable that holds the Simple-Harness API key. Env ``SIMPLE_HARNESS_API_KEY_ENV``, ini ``[simple-harness] api_key_env``, or empty.
+
+    The config value is a NAME — never the secret itself. The adapter
+    reads the named variable from the environment when building the child
+    env (see ``adapter.build_simple_harness_env``) and threads it as
+    ``SIMPLE_HARNESS_API_KEY`` (the literal env var the harness reads per
+    internal/config/config.go:320 — ``case "api_key": mc.APIKey = val``).
+
+    Empty means "no key wired": the child env simply omits
+    ``SIMPLE_HARNESS_API_KEY`` and the harness reports its own config
+    error on launch (exit 2 if the endpoint requires auth). This
+    indirection lets callers route the key through whatever env var they
+    already populate (e.g. ``SIMPLE_HARNESS_API_KEY``, ``OPENAI_API_KEY``,
+    or a vault-supplied name).
+    """
+    env = os.environ.get("SIMPLE_HARNESS_API_KEY_ENV")
+    if env:
+        return env
+    configured = _ini("simple-harness", "api_key_env")
+    return configured or ""
+
+
+def get_simple_harness_max_turns() -> int:
+    """Simple-harness max-turns upper bound. Env ``SIMPLE_HARNESS_MAX_TURNS``, ini ``[simple-harness] max_turns``, or ``8``.
+
+    The default ``8`` matches the harness's own default (SCOPE §14 /
+    ``--max-turns <n>`` description: "default: 8 per GOAL §2 deliverable 6").
+    The flag is required by the harness (without it the loop could
+    recurse unbounded per the same flag's description). ``0`` means
+    "omit the flag" (the adapter treats ``0`` as "use harness default")
+    — the explicit ``--max-turns 8`` form is the documented
+    pattern-parity surface (the adapter always emits the flag with the
+    cfg's value when non-zero).
+    """
+    env = os.environ.get("SIMPLE_HARNESS_MAX_TURNS")
+    if env:
+        try:
+            return int(env.strip())
+        except ValueError:
+            return 8
+    configured = _ini("simple-harness", "max_turns")
+    try:
+        return int(configured) if configured else 8
+    except ValueError:
+        return 8
+
+
+def get_simple_harness_workdir() -> str:
+    """Simple-harness workspace directory. Env ``SIMPLE_HARNESS_WORKDIR``, ini ``[simple-harness] workdir``, or empty.
+
+    Empty (default) means the harness defaults to cwd (per ``--workspace
+    <dir>`` "defaults to cwd"). Non-empty values are emitted as
+    ``--workspace <dir>`` in argv (the qwen workdir precedent: emit
+    when non-empty, omit otherwise).
+    """
+    env = os.environ.get("SIMPLE_HARNESS_WORKDIR")
+    if env:
+        return env
+    configured = _ini("simple-harness", "workdir")
+    return configured or ""
+
+
 # ── MCP-Light capability surface (Run 004 / Objective A) ─────────────
 #
 # MCP-Light is a governed, OPTIONAL capability: defaults are empty/false so

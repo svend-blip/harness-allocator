@@ -60,6 +60,8 @@ def build_launch_command(harness, model_target=None, task=None, cfg=None) -> str
         return build_aider_invocation(model_target, task, cfg)
     if harness == "crush":
         return build_crush_invocation(model_target, task, cfg)
+    if harness == "simple-harness":
+        return build_simple_harness_invocation(model_target, task, cfg)
     raise ValueError(f"not a native harness: {harness!r}")
 
 
@@ -81,6 +83,8 @@ def build_launch_argv(harness, model_target=None, task=None, cfg=None) -> list:
         return build_aider_argv(model_target, task, cfg)
     if harness == "crush":
         return build_crush_argv(model_target, task, cfg)
+    if harness == "simple-harness":
+        return build_simple_harness_argv(model_target, task, cfg)
     raise ValueError(f"not a native harness: {harness!r}")
 
 
@@ -139,6 +143,8 @@ def build_task_invocation(harness, model_target=None, task=None, cfg=None) -> st
         return build_aider_invocation(model_target, task, cfg)
     if harness == "crush":
         return build_crush_invocation(model_target, task, cfg)
+    if harness == "simple-harness":
+        return build_simple_harness_invocation(model_target, task, cfg)
     raise ValueError(f"no one-shot task invocation for harness {harness!r}")
 
 
@@ -162,6 +168,8 @@ def build_task_argv(harness, model_target=None, task=None, cfg=None) -> list:
         return build_aider_argv(model_target, task, cfg)
     if harness == "crush":
         return build_crush_argv(model_target, task, cfg)
+    if harness == "simple-harness":
+        return build_simple_harness_argv(model_target, task, cfg)
     raise ValueError(f"no one-shot task invocation for harness {harness!r}")
 
 
@@ -744,6 +752,191 @@ def build_crush_env(model_target=None, cfg=None) -> dict:
         if key:
             env["OPENAI_API_KEY"] = key
     return env
+
+
+def build_simple_harness_invocation(model_target=None, task=None, cfg=None) -> str:
+    """The shell command that starts a native Simple-Harness invocation.
+
+    ``[<simple_harness_bin>, run, --base-url, <url>, --model, <model>,
+    --workspace, <dir>?, --permission, read_only, --output, jsonl,
+    --prompt-file, <file>, --max-turns, <n>?]`` — shlex-joined for log /
+    display. See :func:`build_simple_harness_argv` for the bound argv shape
+    and the evidence grounding each flag in the installed ``simple-harness``
+    build (0.1.0-dev, pinned at ``/home/svend/simple-harness/`` via Run 023
+    handoff 076). The model is a CLI flag (mirror aider / sweagent / crush,
+    NOT env like qwen / goose).
+
+    The base URL is REQUIRED by the harness (SCOPE §28 — empty
+    ``--base-url`` is exit code 2); the adapter refuses with a typed
+    ``ValueError`` when the cfg's base_url is empty / whitespace.
+
+    The task is REQUIRED by the harness (SCOPE §28 — missing
+    ``--prompt-file`` is exit code 2); the adapter writes the task to a
+    tempfile (the harness takes the prompt as a file path, not a string)
+    and threads that path as ``--prompt-file``. The tempfile is left on
+    disk after the harness process exits (a future handoff may add a
+    cleanup hook in invoke.py; this is documented but out of fence for
+    THIS run).
+    """
+    return _join_argv(build_simple_harness_argv(model_target, task, cfg))
+
+
+def build_simple_harness_argv(model_target=None, task=None, cfg=None) -> list:
+    """The headless one-shot simple-harness invocation as an argv list.
+
+    ``[<simple_harness_bin>, run, --base-url, <url>, --model, <model>,
+    --workspace, <dir>?, --permission, read_only, --output, jsonl,
+    --prompt-file, <file>, --max-turns, <n>?]``.
+
+    Bound against the installed simple-harness 0.1.0-dev build (see
+    ``simple-harness run --help``, the wrapper at
+    ``/home/svend/simple-harness/bin/simple-harness``, and the contract
+    docs at ``/home/svend/simple-harness/docs/HARNESS-CONTRACT.md`` and
+    ``SCOPE.md``):
+
+    - ``run`` — the headless one-shot subcommand. The V1 surface is
+      "flag-driven config-error path" (no stdin REPL, no multi-turn,
+      no tools) per the ``simple-harness run --help`` description.
+    - ``--base-url <url>`` — REQUIRED. The adapter refuses with a typed
+      ``ValueError`` when empty (the harness itself exits 2 on empty
+      ``--base-url`` per SCOPE §28; the refusal surfaces BEFORE any
+      subprocess, matching the qwen / goose / crush / aider pattern).
+    - ``--model <model>`` — REQUIRED by the harness (empty exits 2);
+      the adapter emits the configured / caller-supplied target.
+    - ``--workspace <dir>`` — emitted only when ``cfg.get_simple_harness_workdir()``
+      is non-empty (the qwen workdir precedent: emit when non-empty,
+      omit otherwise). When omitted the harness defaults to cwd.
+    - ``--permission read_only`` — ALWAYS emitted. The safe default
+      (matches the harness's own default per HARNESS-CONTRACT.md
+      line 294: "Default ``read_only`` (SCOPE §12: never silent
+      escalation)"). The full permission surface
+      (``read_only | workspace_write | full_access``) is exposed in
+      the manifest but the adapter always emits ``read_only`` for
+      the launch — the safe-default ratchet.
+    - ``--output jsonl`` — ALWAYS emitted. The spec says "JSONL events
+      on stdout" (started / status / model_request / assistant_stream /
+      completed / interrupted, ``protocol_version: "1"``).
+    - ``--prompt-file <file>`` — REQUIRED. The adapter writes ``task``
+      to a ``tempfile.NamedTemporaryFile`` (``delete=False``) and threads
+      that path; the harness reads the prompt from the file (SCOPE §28
+      — missing ``--prompt-file`` is exit code 2; the ``-`` value
+      meaning stdin is documented but stdin handling is deferred).
+      The tempfile leaks into ``/tmp`` after the harness exits; a
+      future cleanup hook in invoke.py may reap it.
+    - ``--max-turns <n>`` — emitted when ``cfg.get_simple_harness_max_turns()
+      > 0`` with the configured value; default 8 (per the spec / HARNESS-
+      CONTRACT default). ``0`` means "omit the flag".
+
+    bin from ``cfg.get_simple_harness_bin()`` (env / ini / default
+    ``"simple-harness"``); missing/empty bin raises a typed ``ValueError``
+    naming ``simple-harness`` (pure string builder, NO filesystem
+    existence check) — the refusal surfaces BEFORE any subprocess.
+
+    simple-harness is a SUPPORTED harness (1010 / Objective A — chat-
+    style like qwen / goose / crush); there is NO experimental gate here
+    (no ``_require_experimental_enabled`` call).
+    """
+    if cfg is None:
+        cfg = config
+    parts = shlex.split(cfg.get_simple_harness_bin())
+    if not parts:
+        # Missing-binary refusal (D1 / D4 contract — mirror build_qwen_argv /
+        # build_goose_argv / build_aider_argv / build_crush_argv): the
+        # resolved binary is empty/whitespace. Refuse with a typed
+        # ValueError naming the harness — no filesystem existence check,
+        # the adapter is a pure string/list builder (no I/O).
+        raise ValueError(
+            "simple-harness binary is not configured "
+            "(empty SIMPLE_HARNESS_BIN / [simple-harness] bin)"
+        )
+    base_url = (cfg.get_simple_harness_base_url() or "").strip()
+    if not base_url:
+        # Missing-base-url refusal (SCOPE §28: empty --base-url is exit
+        # code 2). Match the crush-style refusal: surface a typed
+        # ValueError naming the harness BEFORE any subprocess — a
+        # cleaner test surface than letting the harness exit 2.
+        raise ValueError(
+            "simple-harness base_url is not configured "
+            "(empty SIMPLE_HARNESS_BASE_URL / [simple-harness] base_url)"
+        )
+    if not base_url.endswith("/v1"):
+        base_url = base_url.rstrip("/") + "/v1"
+    model = model_target_identity(model_target)
+    if not model:
+        # Missing-model refusal (mirror the missing-base-url refusal —
+        # SCOPE §28: empty --model is exit code 2). Raise BEFORE the
+        # subprocess so the test surface is typed.
+        raise ValueError(
+            "simple-harness model is not configured "
+            "(empty model_target — required by the harness SCOPE §28)"
+        )
+    parts += ["run", "--base-url", base_url, "--model", model]
+    workdir = (cfg.get_simple_harness_workdir() or "").strip()
+    if workdir:
+        parts += ["--workspace", workdir]
+    parts += ["--permission", "read_only", "--output", "jsonl"]
+    if task:
+        # The harness takes the prompt as a file path. Write task to a
+        # tempfile; the harness reads it via --prompt-file. The tempfile
+        # is left on disk after the harness exits (leaks into /tmp) — a
+        # future cleanup hook in invoke.py may reap it.
+        import tempfile
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, prefix="simple_harness_prompt_"
+        )
+        tmp.write(task)
+        tmp.flush()
+        tmp.close()
+        parts += ["--prompt-file", tmp.name]
+    max_turns = cfg.get_simple_harness_max_turns()
+    if max_turns and max_turns > 0:
+        parts += ["--max-turns", str(max_turns)]
+    return parts
+
+
+def build_simple_harness_env(model_target=None, cfg=None) -> dict:
+    """The child-env override dict for a headless simple-harness invocation.
+
+    simple-harness reads its API key from the ``SIMPLE_HARNESS_API_KEY``
+    env var (the harness's own namespacing convention per
+    ``internal/config/config.go`` line 320 — ``case "api_key":
+    mc.APIKey = val``); the dict threads that var NAME-only indirection:
+
+    - ``SIMPLE_HARNESS_API_KEY`` — the VALUE read from the environment
+      variable NAMED by ``cfg.get_simple_harness_api_key_env()`` (the
+      config value is a NAME, never the secret). OMITTED when the name
+      is empty or the named variable is unset / empty.
+
+    Returns an empty dict when there is nothing to set (no key wired)
+    — the caller can then fall back to inheriting the parent env. This
+    mirrors the qwen / goose / crush "return ``{}`` when nothing is
+    wired" contract.
+
+    **Honest boundary:** the BASE URL is NOT threaded via env
+    (``SIMPLE_HARNESS_BASE_URL`` is honoured by the harness but argv
+    ``--base-url`` wins per the precedence chain; the adapter already
+    emits ``--base-url`` so re-threading here would be redundant). The
+    API key, however, has NO argv surface (the harness reads it from
+    ``SIMPLE_HARNESS_API_KEY`` only — verified by reading
+    ``internal/config/config.go`` applyEnv).
+
+    ``model_target`` is accepted for call-shape parity with the other
+    ``build_*_env`` builders and is deliberately NOT used in env —
+    simple-harness takes the model as a CLI flag (``--model <model>``,
+    set by :func:`build_simple_harness_argv`).
+    """
+    if cfg is None:
+        cfg = config
+    env: dict = {}
+    name = (cfg.get_simple_harness_api_key_env() or "").strip()
+    if name:
+        import os
+        key = os.environ.get(name)
+        if key:
+            env["SIMPLE_HARNESS_API_KEY"] = key
+    return env
+
+
 
 
 def build_whip_invocation(model_target=None, task=None, cfg=None) -> str:

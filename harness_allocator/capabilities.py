@@ -1,6 +1,6 @@
-"""Normalized capability manifest for the supported harnesses (nine total in
+"""Normalized capability manifest for the supported harnesses (eleven total in
 this module — ``codex``, ``claude-code``, ``opencode``, ``dsh``, ``qwen``,
-``goose``, ``crush`` are the SEVEN ``SUPPORTED_HARNESSES``; ``sweagent`` and
+``goose``, ``crush``, ``whip``, ``simple-harness`` are the NINE ``SUPPORTED_HARNESSES``; ``sweagent`` and
 ``aider`` are the TWO ``EXPERIMENTAL_HARNESSES`` — registered in the
 adapter surface but gated by ``[experimental] enabled_harnesses``, NOT
 exposed as defaults). ``goose`` (Run 026 / HA-3) was the first EXTENSIBLE
@@ -115,8 +115,8 @@ from __future__ import annotations
 
 class UnknownHarnessError(ValueError):
     """Raised by ``get_capabilities`` for a harness key that is not one of
-    the four supported harnesses (``codex``, ``claude-code``, ``opencode``,
-    ``dsh``). The message names the unknown harness.
+    the nine supported harnesses (``codex``, ``claude-code``, ``opencode``,
+    ``dsh``, ``qwen``, ``goose``, ``crush``, ``whip``, ``simple-harness``). The message names the unknown harness.
     """
 
 
@@ -785,15 +785,59 @@ _MANIFEST_WHIP = {
 }
 
 
+_MANIFEST_SIMPLE_HARNESS = {
+    "execution": {
+        "terminal": True,
+        "headless": True,
+        "interactive": True,
+    },
+    "workspace": {
+        "read_only": True,
+        "workspace_write": True,
+        "full_access": True,
+    },
+    "sessions": {
+        "persistent_session": False,
+        "session_resume": False,
+        "mode": "fresh",
+    },
+    "extensions": {
+        "skills": True,
+        "mcp": True,
+        "custom_tools": False,
+        "repo_task_agent": False,
+        "git_aware": False,
+        "patch_output": False,
+    },
+    "automation": {
+        "non_interactive": True,
+        "deterministic_exit": True,
+        "interrupt_safe": True,
+    },
+    "concurrency": {
+        "parallel_readers": True,
+        "exclusive_workspace_writer": True,
+    },
+    "lifecycle": {
+        "interrupt_current_task": True,
+        "resumable_session": False,
+        "child_process_cleanup": True,
+    },
+    "models": {
+        "openai_compatible_endpoint": True,
+    },
+}
+
+
 #: The set of harness keys that ``get_capabilities`` accepts.
-SUPPORTED_HARNESSES = ("codex", "claude-code", "opencode", "dsh", "qwen", "goose", "crush")
+SUPPORTED_HARNESSES = ("codex", "claude-code", "opencode", "dsh", "qwen", "goose", "crush", "whip", "simple-harness")
 
 #: The experimental set — registered in the adapter surface but NOT exposed
 #: as defaults. A harness in this tuple is gated by
 #: ``config.get_experimental_enabled_harnesses()``; an empty enable-set
 #: refuses both build_*_argv calls with a typed ValueError BEFORE any
 #: subprocess. (Run 027 / HA-4 §1 D3 — the D3 experimental gate.)
-EXPERIMENTAL_HARNESSES = ("sweagent", "aider", "whip")
+EXPERIMENTAL_HARNESSES = ("sweagent", "aider")
 
 #: Normalized capability value vocabulary used throughout the capability
 #: model. Every capability value assigned to a manifest section must come
@@ -811,7 +855,8 @@ def get_capabilities(harness) -> dict:
 
     Raises :class:`UnknownHarnessError` (a :class:`ValueError` subclass) when
     ``harness`` is not one of ``codex``, ``claude-code``, ``opencode``,
-    ``dsh``, ``qwen``, ``goose``, ``crush``, ``sweagent``, ``aider``, ``whip``. The
+    ``dsh``, ``qwen``, ``goose``, ``crush``, ``whip``, ``simple-harness``,
+    ``sweagent``, ``aider``. The
     error message names the unknown harness.
     """
     if harness == "codex":
@@ -924,5 +969,16 @@ def get_capabilities(harness) -> dict:
             "concurrency": dict(_MANIFEST_WHIP["concurrency"]),
             "lifecycle": dict(_MANIFEST_WHIP["lifecycle"]),
             "models": dict(_MANIFEST_WHIP["models"]),
+        }
+    if harness == "simple-harness":
+        return {
+            "execution": dict(_MANIFEST_SIMPLE_HARNESS["execution"]),
+            "workspace": dict(_MANIFEST_SIMPLE_HARNESS["workspace"]),
+            "sessions": dict(_MANIFEST_SIMPLE_HARNESS["sessions"]),
+            "extensions": dict(_MANIFEST_SIMPLE_HARNESS["extensions"]),
+            "automation": dict(_MANIFEST_SIMPLE_HARNESS["automation"]),
+            "concurrency": dict(_MANIFEST_SIMPLE_HARNESS["concurrency"]),
+            "lifecycle": dict(_MANIFEST_SIMPLE_HARNESS["lifecycle"]),
+            "models": dict(_MANIFEST_SIMPLE_HARNESS["models"]),
         }
     raise UnknownHarnessError(f"unknown harness: {harness!r}")

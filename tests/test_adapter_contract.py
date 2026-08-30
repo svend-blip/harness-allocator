@@ -2,7 +2,7 @@
 
 This module drives the formal lifecycle contract (from
 ``harness_allocator.adapter_contract``) against every registered harness
-(the seven in ``SUPPORTED_HARNESSES`` plus the three in
+(the nine in ``SUPPORTED_HARNESSES`` plus the two in
 ``EXPERIMENTAL_HARNESSES``).
 
 The two bound test names below are mandatory — TG5 checks for their
@@ -131,7 +131,7 @@ def test_unsupported_lifecycle_operations_are_reported_not_emulated(
 # Regression guard — harness roster
 # ---------------------------------------------------------------------------
 
-def test_all_ten_harnesses_covered() -> None:
+def test_all_eleven_harnesses_covered() -> None:
     """Verify that the combined roster contains exactly ten harnesses.
 
     TG4 checks that every harness name from
@@ -139,8 +139,8 @@ def test_all_ten_harnesses_covered() -> None:
     file.  This assertion guarantees the parametrize fixture iterates over
     the full set.
     """
-    assert len(ALL_HARNESSES) == 10, (
-        f"Expected 10 registered harnesses, got {len(ALL_HARNESSES)}: {ALL_HARNESSES}"
+    assert len(ALL_HARNESSES) == 11, (
+        f"Expected 11 registered harnesses, got {len(ALL_HARNESSES)}: {ALL_HARNESSES}"
     )
 
 

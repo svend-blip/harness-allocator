@@ -105,7 +105,7 @@ from .definition import NATIVE_HARNESSES
 _ACTIVITY_MARKERS = ("esc interrupt", "esc to interrupt", "↓")
 
 
-#: LaunchSpec table for the SEVEN supported harnesses (literal per-harness
+#: LaunchSpec table for the NINE supported harnesses (literal per-harness
 #: values; not computed at runtime). Values are NOT computed at import time —
 #: each is grounded in the source named in this module's docstring.
 _LAUNCH_SPEC_SUPPORTED = {
@@ -158,10 +158,29 @@ _LAUNCH_SPEC_SUPPORTED = {
         "required_env": [],
         "activity_markers": list(_ACTIVITY_MARKERS),
     },
+    "whip": {
+        "mode": "one_shot",
+        "needs_initial_prompt": False,
+        "anchor": "none",
+        "required_env": [],
+        "activity_markers": list(_ACTIVITY_MARKERS),
+    },
+    "simple-harness": {
+        # Simple-harness is headless one-shot via ``simple-harness run ...``;
+        # no persistent process; no required env (the harness reads
+        # SIMPLE_HARNESS_API_KEY from the parent env only when wired via
+        # cfg.get_simple_harness_api_key_env, which is an adapter detail,
+        # not a launchspec gate). mirror crush / qwen / goose.
+        "mode": "one_shot",
+        "needs_initial_prompt": False,
+        "anchor": "none",
+        "required_env": [],
+        "activity_markers": list(_ACTIVITY_MARKERS),
+    },
 }
 
 
-#: LaunchSpec table for the THREE experimental harnesses (sweagent, aider, whip).
+#: LaunchSpec table for the TWO experimental harnesses (sweagent, aider).
 #: Same key set; values grounded in adapter.py / chain_watchdog.py.
 _LAUNCH_SPEC_EXPERIMENTAL = {
     "sweagent": {
@@ -176,13 +195,6 @@ _LAUNCH_SPEC_EXPERIMENTAL = {
         "activity_markers": list(_ACTIVITY_MARKERS),
     },
     "aider": {
-        "mode": "one_shot",
-        "needs_initial_prompt": False,
-        "anchor": "none",
-        "required_env": [],
-        "activity_markers": list(_ACTIVITY_MARKERS),
-    },
-    "whip": {
         "mode": "one_shot",
         "needs_initial_prompt": False,
         "anchor": "none",
@@ -318,7 +330,7 @@ def get_launch_spec(harness) -> dict:
 # discrepancy to resolve in a later run (likely as part of the runtime
 # migration to read this spec).
 
-#: StopSpec table for the SEVEN supported harnesses. Literal per-harness
+#: StopSpec table for the NINE supported harnesses. Literal per-harness
 #: values; not computed at runtime.
 _STOP_SPEC_SUPPORTED = {
     "codex": {
@@ -363,10 +375,28 @@ _STOP_SPEC_SUPPORTED = {
         "grace_seconds": 1,
         "verify": "pid_gone",
     },
+    "whip": {
+        # LaunchSpec.mode = "one_shot" → invoke ladder, 1 s grace.
+        "signals": ["SIGINT", "SIGTERM", "SIGKILL"],
+        "grace_seconds": 1,
+        "verify": "pid_gone",
+    },
+    "simple-harness": {
+        # LaunchSpec.mode = "one_shot" → invoke ladder, 1 s grace.
+        # Mirror crush / qwen / goose: the harness runs the same
+        # SIGINT → SIGTERM → SIGKILL cancel ladder documented in
+        # invoke.py (CANCEL_GRACE_SECONDS = 1.0). The harness emits
+        # an ``interrupted`` JSONL event on SIGTERM (SCOPE §26) and
+        # exits 6 — the invoke layer's measured path handles it
+        # unchanged.
+        "signals": ["SIGINT", "SIGTERM", "SIGKILL"],
+        "grace_seconds": 1,
+        "verify": "pid_gone",
+    },
 }
 
 
-#: StopSpec table for the THREE experimental harnesses (sweagent, aider, whip).
+#: StopSpec table for the TWO experimental harnesses (sweagent, aider).
 #: Same key set; values grounded in invoke.py / chain_watchdog.py.
 _STOP_SPEC_EXPERIMENTAL = {
     "sweagent": {
@@ -376,12 +406,6 @@ _STOP_SPEC_EXPERIMENTAL = {
         "verify": "pid_gone",
     },
     "aider": {
-        # LaunchSpec.mode = "one_shot" → invoke ladder, 1 s grace.
-        "signals": ["SIGINT", "SIGTERM", "SIGKILL"],
-        "grace_seconds": 1,
-        "verify": "pid_gone",
-    },
-    "whip": {
         # LaunchSpec.mode = "one_shot" → invoke ladder, 1 s grace.
         "signals": ["SIGINT", "SIGTERM", "SIGKILL"],
         "grace_seconds": 1,

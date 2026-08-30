@@ -4,7 +4,7 @@ Contract (GOAL.md Run 036 §1 D1+D2, §4 TG1–TG4, and the binding constraints)
 
 - ``get_launch_spec(harness)`` returns a dict whose keys are EXACTLY
   ``{mode, needs_initial_prompt, anchor, required_env, activity_markers}``
-  for every registered harness (the SEVEN supported plus the TWO
+  for every registered harness (the NINE supported plus the TWO
   experimental). The roster is DERIVED from ``SUPPORTED_HARNESSES +
   EXPERIMENTAL_HARNESSES`` — never a hand-listed tuple.
 - ``get_stop_spec(harness)`` returns a dict whose keys are EXACTLY

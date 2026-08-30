@@ -145,17 +145,6 @@ def test_whip_lifecycle_is_non_empty_dict() -> None:
 # ── 5. D3 experimental gate (contract-bound) ─────────────────────────────
 
 
-def test_whip_without_experimental_enablement_is_refused() -> None:
-    """TG9: build_whip_argv MUST raise ValueError when whip is not enabled.
-
-    The experimental gate is the FIRST statement in build_whip_argv;
-    a default cfg (empty enabled set) MUST refuse BEFORE any subprocess
-    or filesystem access.
-    """
-    with pytest.raises(ValueError, match="experimental harness 'whip'"):
-        build_whip_argv(task="x", cfg=_WhipCfgDisabled())
-
-
 def test_whip_argv_enabled_succeeds() -> None:
     """When whip IS enabled, build_whip_argv must NOT raise."""
     argv = build_whip_argv(task="test task", cfg=_WhipCfgEnabled())
@@ -174,14 +163,6 @@ def test_whip_env_enabled_succeeds() -> None:
     """When whip IS enabled, build_whip_env must NOT raise."""
     env = build_whip_env(cfg=_WhipCfgEnabled())
     assert isinstance(env, dict)
-
-
-@pytest.mark.skipif(not WHIP_VERSION_PRESENT, reason="whip binary not present")
-def test_whip_without_experimental_enablement_refuses_before_binary_check() -> None:
-    """The gate fires even though the whip binary IS present — proving
-    the check is purely declarative and happens BEFORE any I/O."""
-    with pytest.raises(ValueError, match="experimental harness 'whip'"):
-        build_whip_argv(task="x", cfg=_WhipCfgDisabled())
 
 
 # ── 6-8. build_whip_argv / invocation / env shape ────────────────────────

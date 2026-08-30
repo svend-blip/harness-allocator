@@ -423,17 +423,17 @@ def test_aider_manifest_automation_non_interactive_is_true():
 
 
 def test_experimental_harnesses_lists_sweagent_and_aider():
-    """EXPERIMENTAL_HARNESSES is exactly (sweagent, aider, whip) — the D3 registered set."""
-    assert EXPERIMENTAL_HARNESSES == ("sweagent", "aider", "whip")
+    """EXPERIMENTAL_HARNESSES is exactly (sweagent, aider) — the D3 registered set."""
+    assert EXPERIMENTAL_HARNESSES == ("sweagent", "aider")
 
 
 def test_supported_harnesses_does_not_include_experimental_keys():
-    """SUPPORTED_HARNESSES still has the seven contract keys (the experimental
+    """SUPPORTED_HARNESSES still has the nine contract keys (the experimental
     harness keys are NOT promoted into the public supported set — D3)."""
     assert "sweagent" not in SUPPORTED_HARNESSES
     assert "aider" not in SUPPORTED_HARNESSES
-    # Seven keys (post-Run 028 / HA-5 + Run 026 / HA-3 + Run 022).
-    assert len(SUPPORTED_HARNESSES) == 7
+    # Nine keys (post-Run 1010 + Run 071 / ELOOP + Run 028 / HA-5 + Run 026 / HA-3 + Run 022).
+    assert len(SUPPORTED_HARNESSES) == 9
 
 
 # ── F. env builders ────────────────────────────────────────────────────

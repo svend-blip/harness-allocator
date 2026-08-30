@@ -11,7 +11,7 @@ it never silently emulates, and it never silently succeeds.
 
 The contract exposes a conformance surface that the generic test suite
 in ``tests/test_adapter_contract.py`` drives against every registered
-harness. The nine existing adapters must pass this suite unchanged,
+harness. The ten existing adapters must pass this suite unchanged,
 which is what makes the contract a description of reality rather than
 an aspiration.
 """
