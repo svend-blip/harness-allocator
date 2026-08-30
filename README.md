@@ -13,50 +13,161 @@ harnesses, models, gates, and artifacts). DPMtF keeps its own
 dispatch, database, roles, verdicts and governance; it only ever needs to ask
 this package for behaviour, not for command strings.
 
-## Model boundary
+## Overview
 
-Harness Allocator does **not** resolve, select, replace, or own the model.
-Model Allocator resolves the model target first; DPMtF passes the already-resolved
-`model_target` here, and the allocator only renders it into the harness's native
-CLI. There is no `resolve_model()` and no silent model or harness substitution.
+**The roster** (derived from `capabilities.SUPPORTED_HARNESSES` /
+`EXPERIMENTAL_HARNESSES` — the count is never hand-written in prose):
 
-## What it owns
+| Harness | LaunchSpec mode | Launch owner | Context reset |
+|---------|-----------------|--------------|---------------|
+| codex | resident_tui | harness_allocator | restart |
+| claude-code | resident_tui | model_allocator | `/clear` |
+| opencode | resident_tui | model_allocator | `/new` |
+| dsh | terminal_wrapped | harness_allocator | restart |
+| qwen | one_shot | harness_allocator | restart |
+| goose | one_shot | harness_allocator | restart |
+| crush | one_shot | harness_allocator | restart |
+| whip | one_shot | model_allocator | restart |
+| simple-harness | one_shot | harness_allocator | restart |
+| sweagent *(experimental)* | one_shot | harness_allocator | restart |
+| aider *(experimental)* | one_shot | harness_allocator | restart |
+
+Experimental harnesses are refused pre-subprocess unless explicitly enabled
+(`experimental_enabled_harnesses`). `launch_owner` is computed from
+`NATIVE_HARNESSES` membership: claude-code/opencode/whip are described here
+but launched by model-allocator's client adapters — a declared asymmetry.
+
+**Model boundary.** Harness Allocator does **not** resolve, select, replace,
+or own the model. Model Allocator resolves the model target first; the caller
+passes the already-resolved `model_target` here, and the allocator only
+renders it into the harness's native CLI. There is no `resolve_model()` and
+no silent model or harness substitution.
+
+**What it owns:**
 
 - **Identity resolution** — `resolve_harness`, `resolve_role_key`,
   `HarnessDefinition.from_role` (role → harness key). No model.
-- **Command generation** — `build_launch_command`, `build_launch_argv`,
-  `build_dsh_invocation`, `build_dsh_argv`, `build_task_invocation`,
-  `build_task_argv` (the DeepSeek Harness and Codex launch surfaces),
-  rendering a passed-through `model_target`.
+- **Command generation** — `build_launch_argv` / `build_task_argv` (and
+  per-harness builders such as `build_dsh_argv`, `build_qwen_argv`,
+  `build_simple_harness_argv`), rendering a passed-through `model_target`.
+  Launch forms start a session; task forms run one prompt.
+- **Per-harness declarations** — `get_capabilities` (the capability
+  manifest), `get_launch_spec` (mode, anchor, required env, activity
+  markers), `get_stop_spec` (signal ladder, grace, verification), and
+  `get_reset_spec` (how a live session's context is reset: an in-session
+  slash command, or restart). All fail closed against the roster.
 - **One-shot execution** — `execute(role, harness, model_target, cwd, task)`
   returning `{ status, output, error, elapsed, pid, request_id, ... }`.
   Subprocess invocation is **argv-style**: a 20k+ character multiline prompt
   is passed to `subprocess.Popen` as one argv element, no shell, no shlex
   round-trip. One complete task = one harness invocation.
-- **Optional framing** — `transport.py` (`encode_request`, `extract_frame`,
-  `FrameReader`): a length-delimited frame protocol is provided for callers
-  that stream stdin into the persistent terminal. It is an implementation
-  detail, not a binding DPMtF contract; callers may feed `execute()` directly
-  with a complete Python string instead.
-- **Request identity / payload verification** — `compute_identity` returns
-  `request_id`, `chars`, `lines`, `sha256` (execution metadata, never
-  chain-of-thought).
-- **The persistent terminal loop** — `render_banner` + `run_terminal` + `main`
-  (`python3 -m harness_allocator`): banner → atomic request → execute → READY,
-  with RUNNING/HEARTBEAT/SUCCESS/ERROR progress and no private reasoning.
-- **Duplicate-request protection** — a completed `(request_id, payload sha256)`
-  is recorded and never executed twice: a repeat reports `DUPLICATE_REQUEST`
-  and returns to READY, unless the frame carries an explicit `retry` flag.
-- **Readiness/status state** — `READY` / `RUNNING` / `SUCCESS` / `ERROR` /
-  `DUPLICATE_REQUEST`.
-- **Environment requirements** — `REQUIRED_ENV`, `missing_env`,
-  `describe_missing`.
+- **Request identity, framing, duplicate protection, the persistent
+  terminal loop, leases, permissions** — see the detail sections below.
 
-## What it must never own
+**What it must never own:** DPMtF flows, verdicts, roles, governance,
+dispatch, or any bridge database. Nothing in this package imports or queries
+a database. It also never owns the model.
 
-DPMtF flows, verdicts, roles, governance, dispatch, or any bridge database.
-Nothing in this package imports or queries a database. It also never owns the
-model: no resolution, no selection, no silent substitution.
+## Architecture
+
+```
+harness_allocator/
+  __init__.py     public API
+  __main__.py     python3 -m harness_allocator (persistent terminal)
+  config.py       own config surface (env vars + harness-allocator.ini)
+  status.py       READY/RUNNING/SUCCESS/ERROR/DUPLICATE_REQUEST tokens
+  definition.py   harness identity + environment requirements (no model)
+  capabilities.py per-harness capability manifests + the roster
+  launchspec.py   LaunchSpec / StopSpec / ResetSpec declarations
+  adapter.py      command generation (argv + shell-string forms, per harness)
+  transport.py    optional framed transport + request identity
+  invoke.py       execute() — argv-style one-shot run + capture + heartbeat
+  lease.py        execution leases
+  permissions.py  permission surface
+  terminal.py     persistent Harness Terminal loop + CLI
+  web/            read-only browse UI (FastAPI, port 9142) — the ONE place
+                  third-party imports are allowed; the package proper is
+                  stdlib-only
+```
+
+## Requirements
+
+- Python 3.10+. **Zero runtime dependencies** for the package proper —
+  standard library only.
+- The web UI (`harness_allocator.web`) additionally needs `fastapi` and
+  `uvicorn`; it is imported only when run.
+- The harnesses themselves are external binaries resolved via config/PATH.
+
+## Installation
+
+### Install manually
+
+```bash
+git clone https://github.com/svend-blip/harness-allocator.git
+cd harness-allocator
+pip install -e .          # or just use it in place — stdlib only
+python3 -m pytest tests -q
+```
+
+### Install using an Agent
+
+Point your coding agent at this repository and ask it to run the manual
+steps above; the package has no build step and no dependency resolution to
+get wrong. Consumers (e.g. DPMtF) locate the package via the
+`HARNESS_ALLOCATOR_PATH` env var or their own project-path config and
+import it read-only.
+
+### Verify installation
+
+```bash
+python3 -c "import harness_allocator as ha; print(sorted(ha.capabilities.SUPPORTED_HARNESSES))"
+python3 -m pytest tests -q     # the full contract suite must be green
+```
+
+## Configuration
+
+Reads, in priority order:
+
+1. Environment variables — e.g. `CODEX_BIN`, `DSH_BIN`, `DSH_PROFILE`,
+   `QWEN_BIN`, `GOOSE_BIN`, `CRUSH_BIN`, `WHIP_BIN`, `SIMPLE_HARNESS_BIN`,
+   `SIMPLE_HARNESS_BASE_URL`, plus per-harness knobs (see
+   `harness-allocator.ini` for the full commented catalogue).
+2. `harness-allocator.ini` — committed defaults, almost entirely
+   commented-out documentation of the surface.
+3. Hardcoded conventional fallbacks (the harness's own launcher name).
+
+There is no `.env` loader: credentials come from the process environment, so
+a harness inherits them exactly as its own CLI expects. API keys are
+configured by **variable name**, never by value.
+
+## Running
+
+```bash
+# The persistent terminal (reads framed requests from stdin, Ctrl-D to quit).
+python3 -m harness_allocator --role probe --harness dsh \
+    --model-target deepseek-v4-pro --cwd .
+
+# One-shot from Python.
+python3 -c "from harness_allocator import execute; print(execute(role='probe', harness='dsh', model_target='deepseek-v4-pro', cwd='.', task='echo ok'))"
+
+# Inspect the argv that execute() will pass to subprocess.Popen.
+python3 -c "from harness_allocator import build_dsh_argv; print(build_dsh_argv(model_target='deepseek-v4-pro', task='line one\nline two\n'))"
+
+# The read-only browse UI (loopback by default — the UI has no auth;
+# widen with HARNESS_WEB_HOST=0.0.0.0 only as an explicit decision).
+python3 -m harness_allocator.web        # http://127.0.0.1:9142
+```
+
+## Testing
+
+```bash
+python3 -m pytest tests -q
+```
+
+The suite is the contract: roster-derived (a harness added to
+`SUPPORTED_HARNESSES` without manifest/Launch/Stop/ResetSpec entries fails
+closed), hermetic (no live harness launches), stdlib + pytest only. The web
+UI tests skip cleanly where FastAPI is absent.
 
 ## Interface
 
@@ -117,7 +228,7 @@ and returns to READY rather than running again.
 The framing is implementation detail. Callers who prefer to skip it can call
 `execute()` directly with the complete prompt as a Python string.
 
-## Ctrl+C behavior (Run 002)
+## Ctrl+C behavior
 
 The persistent terminal handles Ctrl+C the same way, whether it is invoked
 directly (`python3 -m harness_allocator`) or through the DPMtF seam
@@ -143,18 +254,10 @@ directly (`python3 -m harness_allocator`) or through the DPMtF seam
   cleanly with no leftover state.
 
 The escalation is observable and bounded — there is no orphan harness
-process after a successful cancellation. Tests cover this end to end:
+process after a successful cancellation. Tests cover this end to end
+(`test_run_argv_cancels_long_running_child_without_orphan` and friends).
 
-- `test_run_argv_cancels_long_running_child_without_orphan` proves the
-  PID is gone (no `/proc/<pid>`).
-- `test_run_argv_cancels_returns_cancelled_status_token` proves the
-  `CANCELLED` token is reported, not `SUCCESS`.
-- `test_run_terminal_running_cancel_returns_to_ready` proves the
-  persistent loop returns to READY after the cancellation.
-- `test_run_terminal_cancelled_turn_clears_event_for_next_turn` proves
-  the next submitted turn runs cleanly without a re-immediate cancel.
-
-## Runtime status (Run 002)
+## Runtime status
 
 `render_banner` / `run_terminal` / `collect_runtime_status` (and the
 mirror in `scripts/bridgeV002/harness_terminal.py`) expose the
@@ -178,57 +281,3 @@ Values are bounded: any value containing `api_key`, `token`, `secret`,
 `password`, or `credential` is filtered to the field's honest default.
 Free-form strings are capped at 512 characters. Unknown information is
 shown as `unknown` or `not configured` — never guessed.
-
-## Layout
-
-```
-harness_allocator/
-  __init__.py   public API
-  __main__.py   python3 -m harness_allocator (persistent terminal)
-  config.py     own config surface (env vars + harness-allocator.ini)
-  status.py     READY/RUNNING/SUCCESS/ERROR/DUPLICATE_REQUEST tokens
-  definition.py harness identity + environment requirements (no model)
-  adapter.py    command generation (argv + shell-string forms)
-  transport.py  optional framed transport + request identity
-  invoke.py     execute() — argv-style one-shot run + capture + heartbeat
-  terminal.py   persistent Harness Terminal loop + CLI
-```
-
-## Configuration
-
-Reads, in priority order:
-
-1. Environment variables — `CODEX_BIN`, `DSH_BIN`, `DSH_PROFILE`,
-   `DSH_V4_PRO_PATCH`.
-2. `harness-allocator.ini` (`[harness]` section) — committed defaults.
-3. Hardcoded fallbacks (`codex`, `npx @deepseek-ai/dsh`, `headless`, empty patch).
-
-There is no `.env` loader: credentials come from the process environment, so a
-harness inherits them exactly as its own CLI expects.
-
-## Requirements
-
-Python 3.10+. **Zero runtime dependencies** — standard library only.
-
-## Run the tests
-
-```bash
-python3 -m pytest tests -q
-```
-
-## Try it
-
-```bash
-# Run the persistent terminal (reads framed requests from stdin, Ctrl-D to quit).
-python3 -m harness_allocator --role probe --harness dsh \
-    --model-target deepseek-v4-pro --cwd .
-
-# Or one-shot from Python.
-python3 -c "from harness_allocator import execute; print(execute(role='probe', harness='dsh', model_target='deepseek-v4-pro', cwd='.', task='echo ok'))"
-
-# Inspect the argv that execute() will pass to subprocess.Popen.
-python3 -c "from harness_allocator import build_dsh_argv; print(build_dsh_argv(model_target='deepseek-v4-pro', task='line one\nline two\n'))"
-
-# Encode a frame for dispatch (optional, for stdin injection).
-python3 -c "from harness_allocator import encode_request; import sys; sys.stdout.buffer.write(encode_request('ha-1', 'line one\nline two\n'))"
-```
