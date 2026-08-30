@@ -326,9 +326,14 @@ def get_launch_spec(harness) -> dict:
 # allocator one-shot cancel path (``invoke.py``) is SIGINT→SIGTERM→SIGKILL.
 # Per GOAL.md §2 ("Declare, do not change" — the spec is wrong until proven
 # otherwise) and D3 ("honest values, measured"), the LIVE behaviour is
-# declared above and the GOAL.md D3 prose is recorded here as a known
-# discrepancy to resolve in a later run (likely as part of the runtime
-# migration to read this spec).
+# declared above.
+#
+# RESOLVED 2026-08-30 (Human adjudication, alignment follow-up): the code's
+# measured declaration is authoritative and the run-036 GOAL prose is
+# superseded on this point. The closed run contract stays unedited —
+# history is not rewritten — and the adjudication is recorded in run 036's
+# RUN-LEDGER. Any future uniformization of the ladders is a behaviour
+# change with its own run, not a spec correction.
 
 #: StopSpec table for the NINE supported harnesses. Literal per-harness
 #: values; not computed at runtime.
