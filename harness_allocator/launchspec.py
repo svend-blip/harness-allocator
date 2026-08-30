@@ -465,3 +465,81 @@ def get_stop_spec(harness) -> dict:
                 "verify": spec["verify"],
             }
     raise UnknownHarnessError(f"unknown harness: {harness!r}")
+
+
+# ── ResetSpec — how a live session's CONTEXT is reset per harness ─────────
+#
+# Added 2026-08-30 (alignment task, item 15). The question "how do I clear
+# this harness's context?" had no declared answer anywhere in the stack:
+# DPMtF carries a per-role fresh_session_command column (dispatch sends it
+# to the pane before injection) and a codex-only restart mechanism
+# (codex_fresh_context_policy -> codex_context_release), but the HARNESS
+# facts those settings encode lived only in operator memory. This roster
+# declares them, fail-closed, in the component that owns interface
+# knowledge.
+#
+# ``method`` is one of:
+#   "slash_command" — the resident TUI clears in-session; ``command`` is
+#                     the literal to send (claude-code /clear, opencode /new).
+#   "restart"       — the harness has NO in-session reset: a fresh context
+#                     requires terminating the process and launching a new
+#                     one (codex — the codex_context_release mechanism is
+#                     exactly this; every one_shot harness — a fresh
+#                     invocation IS a fresh context; dsh — the terminal
+#                     wrapper launches per wakeup).
+#
+# A DECLARATION of today's behaviour, the StopSpec convention: consumers
+# (DPMtF's dispatch fresh-session path, the role editor's harness picker)
+# read it; nothing here executes anything.
+
+_RESET_SUPPORTED = {
+    "codex": {"method": "restart", "command": None},
+    "claude-code": {"method": "slash_command", "command": "/clear"},
+    "opencode": {"method": "slash_command", "command": "/new"},
+    "dsh": {"method": "restart", "command": None},
+    "qwen": {"method": "restart", "command": None},
+    "goose": {"method": "restart", "command": None},
+    "crush": {"method": "restart", "command": None},
+    "whip": {"method": "restart", "command": None},
+    "simple-harness": {"method": "restart", "command": None},
+}
+
+_RESET_EXPERIMENTAL = {
+    "sweagent": {"method": "restart", "command": None},
+    "aider": {"method": "restart", "command": None},
+}
+
+
+def _all_reset_specs():
+    """Yield every harness's ResetSpec dict (roster is DERIVED).
+
+    Same fail-closed derivation as :func:`_all_specs`: a harness added to
+    ``SUPPORTED_HARNESSES`` / ``EXPERIMENTAL_HARNESSES`` without a reset
+    entry raises :class:`UnknownHarnessError` instead of silently missing.
+    """
+    for name in SUPPORTED_HARNESSES:
+        spec = _RESET_SUPPORTED.get(name)
+        if spec is None:
+            raise UnknownHarnessError(f"unknown harness: {name!r}")
+        yield name, spec
+    for name in EXPERIMENTAL_HARNESSES:
+        spec = _RESET_EXPERIMENTAL.get(name)
+        if spec is None:
+            raise UnknownHarnessError(f"unknown harness: {name!r}")
+        yield name, spec
+
+
+def get_reset_spec(harness) -> dict:
+    """Return the ResetSpec dict for ``harness``.
+
+    EXACTLY two keys: ``method`` (``"slash_command"`` | ``"restart"``) and
+    ``command`` (the literal to send for slash_command, else ``None``).
+    Deep-copied per call, mirroring :func:`get_launch_spec` /
+    :func:`get_stop_spec`. Raises
+    :class:`harness_allocator.capabilities.UnknownHarnessError` for a name
+    outside the roster.
+    """
+    for name, spec in _all_reset_specs():
+        if name == harness:
+            return {"method": spec["method"], "command": spec["command"]}
+    raise UnknownHarnessError(f"unknown harness: {harness!r}")

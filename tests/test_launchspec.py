@@ -59,6 +59,7 @@ from harness_allocator.capabilities import (  # noqa: E402
 )
 from harness_allocator.launchspec import (  # noqa: E402
     get_launch_spec,
+    get_reset_spec,
     get_stop_spec,
 )
 
@@ -515,3 +516,71 @@ def test_get_stop_spec_returns_fresh_dict_per_call(harness):
         f"a subsequent call to get_stop_spec({harness!r}) sees the mutation "
         f"sentinel — module-level table was corrupted"
     )
+
+
+# ── ResetSpec (2026-08-30, alignment item 15) ────────────────────────────
+
+
+@pytest.mark.parametrize("harness", ALL_HARNESSES)
+def test_get_reset_spec_covers_the_whole_roster(harness):
+    """Every registered harness has a ResetSpec — fail-closed derivation."""
+    spec = get_reset_spec(harness)
+    assert set(spec.keys()) == {"method", "command"}, (
+        f"ResetSpec for {harness!r} must have EXACTLY method+command, "
+        f"got {sorted(spec.keys())!r}"
+    )
+    assert spec["method"] in ("slash_command", "restart"), (
+        f"ResetSpec method for {harness!r} outside vocabulary: "
+        f"{spec['method']!r}"
+    )
+    if spec["method"] == "slash_command":
+        assert isinstance(spec["command"], str) and spec["command"].startswith("/"), (
+            f"slash_command reset for {harness!r} must carry a /command, "
+            f"got {spec['command']!r}"
+        )
+    else:
+        assert spec["command"] is None, (
+            f"restart reset for {harness!r} must not carry a command, "
+            f"got {spec['command']!r}"
+        )
+
+
+def test_reset_spec_pins_the_known_in_session_resets():
+    """The two resident TUIs with in-session resets are pinned literally.
+
+    claude-code clears with /clear, opencode with /new (the values DPMtF's
+    1010 roles carry in fresh_session_command — measured live behaviour,
+    now declared). codex is restart: its context release has always been
+    stop+relaunch (codex_context_release), never a slash command.
+    """
+    assert get_reset_spec("claude-code") == {
+        "method": "slash_command", "command": "/clear"}
+    assert get_reset_spec("opencode") == {
+        "method": "slash_command", "command": "/new"}
+    assert get_reset_spec("codex") == {"method": "restart", "command": None}
+
+
+def test_reset_spec_one_shots_are_restart():
+    """Every one_shot harness resets by restart: a fresh invocation IS a
+    fresh context (simple-harness has no in-session reset at all —
+    sessions.go is read-only, no resume)."""
+    for harness in ALL_HARNESSES:
+        if get_launch_spec(harness)["mode"] == "one_shot":
+            assert get_reset_spec(harness)["method"] == "restart", (
+                f"one_shot harness {harness!r} declared a non-restart reset"
+            )
+
+
+def test_get_reset_spec_unknown_harness_raises():
+    with pytest.raises(UnknownHarnessError) as exc_info:
+        get_reset_spec("no-such-harness")
+    assert "no-such-harness" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("harness", ALL_HARNESSES)
+def test_get_reset_spec_returns_fresh_dict_per_call(harness):
+    a = get_reset_spec(harness)
+    b = get_reset_spec(harness)
+    assert a is not b
+    a["command"] = "MUTATION_SENTINEL"
+    assert get_reset_spec(harness)["command"] != "MUTATION_SENTINEL"
