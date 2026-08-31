@@ -90,6 +90,13 @@ harness_allocator/
                   stdlib-only
 ```
 
+Architecture decisions against external harness designs are recorded as
+ADRs: `docs/ADR-TRUSS-REVIEW.md` holds six concept verdicts
+(ADOPT/ADAPT/REJECT/DEFER) from the Truss review, cited to a pinned
+read-only clone — a study, not an integration; adopted concepts arrive
+through their own governed runs. Archived working notes live under
+`docs/archive/`.
+
 ## Requirements
 
 - Python 3.10+. **Zero runtime dependencies** for the package proper —
