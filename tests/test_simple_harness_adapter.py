@@ -237,7 +237,7 @@ def test_simple_harness_argv_run_subcommand_is_first_after_bin():
     assert argv[1] == "run"
 
 
-def test_simple_harness_argv_permission_is_always_read_only():
+def test_simple_harness_argv_run_form_permission_defaults_to_read_only():
     """``--permission read_only`` is ALWAYS present (the safe-default ratchet)."""
     argv = build_simple_harness_argv(
         model_target="qwen3-coder-30b-32k:latest",
@@ -998,3 +998,17 @@ def test_simple_harness_permission_read_from_ini(monkeypatch):
     )
     assert config.get_simple_harness_permission() == "workspace_write"
 
+
+
+def test_simple_harness_argv_run_form_emits_configured_permission():
+    """The RUN form resolves the configured mode, like the LAUNCH form.
+
+    This is what the Harness Terminal invokes for every dispatch once
+    simple-harness is terminal_wrapped, so a hardcoded read_only here meant
+    an implementer that could not write a file whatever the machine
+    configured.
+    """
+    argv = build_simple_harness_argv(
+        model_target="m", task="t", cfg=_WorkspaceWriteCfg(),
+    )
+    assert argv[argv.index("--permission") + 1] == "workspace_write"

@@ -844,8 +844,8 @@ def build_simple_harness_argv(model_target=None, task=None, cfg=None) -> list:
       line 294: "Default ``read_only`` (SCOPE §12: never silent
       escalation)"), so an unconfigured machine is unchanged. An unknown
       mode is refused with a typed ``ValueError`` rather than downgraded.
-      NOTE: the RUN form still emits a hardcoded ``read_only`` pending a
-      Human decision — see the comment at its emission site.
+      Both forms resolve it; the RUN form's former hardcoded ``read_only``
+      blocked every terminal_wrapped dispatch from writing.
     - ``--output jsonl`` — ALWAYS emitted. The spec says "JSONL events
       on stdout" (started / status / model_request / assistant_stream /
       completed / interrupted, ``protocol_version: "1"``).
@@ -922,13 +922,14 @@ def build_simple_harness_argv(model_target=None, task=None, cfg=None) -> list:
     workdir = (cfg.get_simple_harness_workdir() or "").strip()
     if workdir:
         parts += ["--workspace", workdir]
-    # DELIBERATE ASYMMETRY, pending a Human decision: the LAUNCH form
-    # resolves the configured mode, this one does not. A machine that
-    # configures workspace_write therefore still gets read_only for
-    # headless one-shot runs — safe, but a config value that governs only
-    # one of two forms is a trap for whoever reads it next. Wiring
-    # `permission` here is a one-line change once the decision is made.
-    parts += ["--permission", "read_only", "--output", "jsonl"]
+    # Both forms resolve the configured mode. The asymmetry this replaces
+    # became a live blocker the moment simple-harness went terminal_wrapped
+    # (2026-09-01): the Harness Terminal invokes THIS form for every dispatch,
+    # so a hardcoded read_only meant an implementer that could not write a
+    # single file no matter what the machine configured. The default is still
+    # read_only and an unknown mode is still refused, so nothing silently
+    # broadens.
+    parts += ["--permission", permission, "--output", "jsonl"]
     if task:
         # The harness takes the prompt as a file path. Write task to a
         # tempfile; the harness reads it via --prompt-file. The file must
