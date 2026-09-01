@@ -1,5 +1,8 @@
-; Harness Allocator — app-config defaults (committed).
-; Environment variables override these values (see harness_allocator/config.py).
+; Harness Allocator — app-config template.
+; Copy into place next to the project root:
+;   cp harness-allocator.ini.example harness-allocator.ini
+; The ini is optional — environment variables override every value and
+; cover the defaults (see harness_allocator/config.py).
 
 [harness]
 ; Codex CLI launcher.
@@ -56,10 +59,13 @@ codex_fresh_context_policy = off
 ; Simple-harness is the NINTH SUPPORTED harness — headless one-shot via
 ; ``simple-harness run --base-url <url> --model <model>
 ; --workspace <dir> --permission <mode> --output jsonl
-; --prompt-file <file> [--max-turns N]``. The wrapper bin is at
-; /home/svend/simple-harness/bin/simple-harness (Run 023 handoff 076).
+; --prompt-file <file> [--max-turns N]``.
 ;
-; simple_harness_bin = simple-harness
+; The quickstart layout clones simple-harness as a SIBLING of this repo,
+; so the wrapper resolves relative to the directory harness-allocator is
+; launched from (the repo root). Comment the line out if the wrapper is
+; on PATH instead; the built-in default is ``simple-harness``.
+simple_harness_bin = ../simple-harness/bin/simple-harness
 ; simple_harness_base_url =
 ; simple_harness_api_key_env =
 ; simple_harness_max_turns = 8

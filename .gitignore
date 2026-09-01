@@ -33,3 +33,7 @@ dist/
 .ruff_cache/
 .coverage
 .DS_Store
+
+# Machine-local app config — harness-allocator.ini.example is the
+# committed template; copy it into place per repo README (added 2026-09-01)
+harness-allocator.ini
