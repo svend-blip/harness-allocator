@@ -14,3 +14,22 @@ dist/
 # Secrets / local config (never committed)
 .env
 *.local.toml
+
+# Databases, env variants, backup/editor litter (added 2026-09-01)
+*.db
+*.sqlite*
+*.db-wal
+*.db-shm
+.env.*
+!.env.example
+*.bak
+*.old
+*.orig
+*~
+*.swp
+*.pid
+.claude/settings.local.json
+.mypy_cache/
+.ruff_cache/
+.coverage
+.DS_Store

@@ -1,15 +1,19 @@
 # Harness Allocator web UI (port 9142) — read-only browse frontend.
 #
+# This is a template: %h expands to the invoking user's home directory,
+# so it works unmodified when the repo is cloned to ~/harness-allocator.
+#
 # A USER unit, installed to ~/.config/systemd/user/ (the mcp-light pattern:
 # no root, the server runs as the owning user and binds a high port).
 #
-# HARNESS_WEB_HOST=0.0.0.0 is the EXPLICIT decision to reach the UI from
-# other machines (Human, 2026-08-30). The code's default is loopback because
-# the UI has no auth — this line IS the auth boundary decision, so removing
-# it returns the service to loopback-only.
+# The server binds loopback by default because the UI has no auth. If you
+# need to reach it from other machines, add
+#   Environment=HARNESS_WEB_HOST=0.0.0.0
+# to [Service] — that line IS the auth boundary decision, and it exposes
+# an unauthenticated UI to your network, so make it deliberately.
 #
 # Install:
-#   cp harness-allocator-web.service ~/.config/systemd/user/
+#   cp harness-allocator-web.service.example ~/.config/systemd/user/harness-allocator-web.service
 #   systemctl --user daemon-reload
 #   systemctl --user enable --now harness-allocator-web
 #   loginctl enable-linger $USER      # start at boot without logging in
@@ -20,12 +24,11 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/svend/harness-allocator
+WorkingDirectory=%h/harness-allocator
 # System python3.12: fastapi/uvicorn are installed system-wide, and the
 # package itself is stdlib-only, importable straight from the working
 # directory — no venv exists or is needed in this repo.
 ExecStart=/usr/bin/python3.12 -m harness_allocator.web
-Environment=HARNESS_WEB_HOST=0.0.0.0
 
 Restart=always
 RestartSec=5
