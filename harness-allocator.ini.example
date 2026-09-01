@@ -70,3 +70,16 @@ simple_harness_bin = ../simple-harness/bin/simple-harness
 ; simple_harness_api_key_env =
 ; simple_harness_max_turns = 8
 ; simple_harness_workdir =
+
+[simple-harness]
+; Permission mode emitted as --permission on a simple-harness LAUNCH.
+; One of: read_only | workspace_write | full_access.
+; Default read_only — the harness's own default (SCOPE §12: never silent
+; escalation). An unknown value is REFUSED, never downgraded.
+;
+; A resident role pane that must create files needs workspace_write; an
+; implementer under read_only cannot execute a handoff at all. This key is
+; machine-wide — it reaches every simple-harness role on the host. Scope it
+; to one role instead by setting SIMPLE_HARNESS_PERMISSION in that role's
+; launch environment; the env var overrides this value.
+; permission = read_only

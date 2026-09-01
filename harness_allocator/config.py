@@ -637,6 +637,27 @@ def get_simple_harness_workdir() -> str:
     return configured or ""
 
 
+def get_simple_harness_permission() -> str:
+    """Simple-harness permission mode. Env ``SIMPLE_HARNESS_PERMISSION``, ini ``[simple-harness] permission``, or ``read_only``.
+
+    The default matches the harness's own (HARNESS-CONTRACT.md: "Default
+    ``read_only`` (SCOPE §12: never silent escalation)"), so an
+    unconfigured machine keeps the safe-default ratchet. Configuring a
+    broader mode is an EXPLICIT act recorded in one place — which is the
+    difference between a considered escalation and a silent one.
+
+    The value is returned verbatim (stripped); validation against the
+    three modes lives in ``adapter.build_simple_harness_argv`` beside the
+    adapter's other typed refusals, so a typo surfaces BEFORE any
+    subprocess rather than as a downgrade the caller never sees.
+    """
+    env = os.environ.get("SIMPLE_HARNESS_PERMISSION")
+    if env:
+        return env.strip()
+    configured = _ini("simple-harness", "permission")
+    return (configured or "read_only").strip()
+
+
 # ── MCP-Light capability surface (Run 004 / Objective A) ─────────────
 #
 # MCP-Light is a governed, OPTIONAL capability: defaults are empty/false so

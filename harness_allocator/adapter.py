@@ -28,6 +28,7 @@ import shlex
 
 from . import config
 from .capabilities import EXPERIMENTAL_HARNESSES
+from .permissions import PERMISSION_MODES
 from .definition import model_target_identity
 
 
@@ -781,6 +782,27 @@ def build_simple_harness_invocation(model_target=None, task=None, cfg=None) -> s
     return _join_argv(build_simple_harness_argv(model_target, task, cfg))
 
 
+def _simple_harness_permission(cfg) -> str:
+    """Resolve and validate the simple-harness permission mode.
+
+    Refuses an unknown value with a typed ``ValueError`` naming the
+    allowed set — the harness itself exits 2 on an invalid mode, and a
+    silent fallback to ``read_only`` would be exactly the downgrade
+    ``permissions.py`` forbids ("Never silently downgrade. Never silently
+    broaden."). The refusal surfaces BEFORE any subprocess, matching the
+    bin / base_url / model refusals in this module.
+    """
+    mode = (cfg.get_simple_harness_permission() or "").strip()
+    allowed = tuple(m.lower() for m in PERMISSION_MODES)
+    if mode not in allowed:
+        raise ValueError(
+            f"simple-harness permission {mode!r} is not one of "
+            f"{allowed} (SIMPLE_HARNESS_PERMISSION / "
+            f"[simple-harness] permission)"
+        )
+    return mode
+
+
 def build_simple_harness_argv(model_target=None, task=None, cfg=None) -> list:
     """The simple-harness invocation as an argv list — two forms.
 
@@ -816,13 +838,14 @@ def build_simple_harness_argv(model_target=None, task=None, cfg=None) -> list:
     - ``--workspace <dir>`` — emitted only when ``cfg.get_simple_harness_workdir()``
       is non-empty (the qwen workdir precedent: emit when non-empty,
       omit otherwise). When omitted the harness defaults to cwd.
-    - ``--permission read_only`` — ALWAYS emitted. The safe default
-      (matches the harness's own default per HARNESS-CONTRACT.md
+    - ``--permission <mode>`` — ALWAYS emitted, in BOTH forms. The mode
+      comes from ``cfg.get_simple_harness_permission()`` whose default is
+      ``read_only`` (the harness's own default per HARNESS-CONTRACT.md
       line 294: "Default ``read_only`` (SCOPE §12: never silent
-      escalation)"). The full permission surface
-      (``read_only | workspace_write | full_access``) is exposed in
-      the manifest but the adapter always emits ``read_only`` for
-      the launch — the safe-default ratchet.
+      escalation)"), so an unconfigured machine is unchanged. An unknown
+      mode is refused with a typed ``ValueError`` rather than downgraded.
+      NOTE: the RUN form still emits a hardcoded ``read_only`` pending a
+      Human decision — see the comment at its emission site.
     - ``--output jsonl`` — ALWAYS emitted. The spec says "JSONL events
       on stdout" (started / status / model_request / assistant_stream /
       completed / interrupted, ``protocol_version: "1"``).
@@ -859,12 +882,20 @@ def build_simple_harness_argv(model_target=None, task=None, cfg=None) -> list:
             "simple-harness binary is not configured "
             "(empty SIMPLE_HARNESS_BIN / [simple-harness] bin)"
         )
+    permission = _simple_harness_permission(cfg)
     if task is None:
         # LAUNCH form: interactive session for a resident role pane.
         # Endpoint/model are the env builder's contract in this form.
         workdir = (cfg.get_simple_harness_workdir() or "").strip()
         if workdir:
             parts += ["--workspace", workdir]
+        # The resident pane inherits the harness's default (read_only) when
+        # no flag is emitted, which made the mode unconfigurable: a role
+        # needing to write had no lever short of editing this builder. The
+        # flag is now ALWAYS emitted with the resolved mode, whose default
+        # is still read_only — the ratchet moves from "hardcoded" to
+        # "explicitly configured", never from "safe" to "open".
+        parts += ["--permission", permission]
         return parts
     base_url = (cfg.get_simple_harness_base_url() or "").strip()
     if not base_url:
@@ -891,6 +922,12 @@ def build_simple_harness_argv(model_target=None, task=None, cfg=None) -> list:
     workdir = (cfg.get_simple_harness_workdir() or "").strip()
     if workdir:
         parts += ["--workspace", workdir]
+    # DELIBERATE ASYMMETRY, pending a Human decision: the LAUNCH form
+    # resolves the configured mode, this one does not. A machine that
+    # configures workspace_write therefore still gets read_only for
+    # headless one-shot runs — safe, but a config value that governs only
+    # one of two forms is a trap for whoever reads it next. Wiring
+    # `permission` here is a one-line change once the decision is made.
     parts += ["--permission", "read_only", "--output", "jsonl"]
     if task:
         # The harness takes the prompt as a file path. Write task to a

@@ -115,6 +115,9 @@ class _SimpleHarnessCfg:
     def get_simple_harness_workdir(self):
         return ""
 
+    def get_simple_harness_permission(self):
+        return "read_only"
+
 
 class _SimpleHarnessCfgFull(_SimpleHarnessCfg):
     """Cfg variant with all knobs configured (base_url with /v1, key, workdir)."""
@@ -443,20 +446,65 @@ def test_simple_harness_env_threads_base_url_and_model():
 
 
 def test_simple_harness_argv_launch_form_is_interactive():
-    """task=None -> the interactive LAUNCH form: [bin], no run/flags/prompt."""
+    """task=None -> the interactive LAUNCH form: [bin, --permission <mode>], no run/prompt."""
     argv = build_simple_harness_argv(
         model_target="qwen3-coder-30b-32k:latest", task=None,
         cfg=_SimpleHarnessCfg(),
     )
-    assert argv == ["simple-harness"]
+    assert argv == ["simple-harness", "--permission", "read_only"]
 
 
 def test_simple_harness_argv_launch_form_carries_workspace():
-    """task=None with a configured workdir -> [bin, --workspace, <dir>]."""
+    """task=None with a configured workdir -> [bin, --workspace, <dir>, --permission, <mode>]."""
     argv = build_simple_harness_argv(
         model_target="m", task=None, cfg=_SimpleHarnessCfgFull(),
     )
-    assert argv == ["simple-harness", "--workspace", "/tmp/simple-harness-work"]
+    assert argv == [
+        "simple-harness", "--workspace", "/tmp/simple-harness-work",
+        "--permission", "read_only",
+    ]
+
+
+class _WorkspaceWriteCfg(_SimpleHarnessCfg):
+    """Cfg that configures the broader mode — the explicit escalation."""
+
+    def get_simple_harness_permission(self):
+        return "workspace_write"
+
+
+class _BadPermissionCfg(_SimpleHarnessCfg):
+    """Cfg carrying a plausible typo: the hyphenated spelling."""
+
+    def get_simple_harness_permission(self):
+        return "workspace-write"
+
+
+def test_simple_harness_argv_launch_form_emits_configured_permission():
+    """A configured mode reaches the LAUNCH argv — the pane is no longer stuck at the default."""
+    argv = build_simple_harness_argv(
+        model_target="m", task=None, cfg=_WorkspaceWriteCfg(),
+    )
+    assert argv == ["simple-harness", "--permission", "workspace_write"]
+
+
+def test_simple_harness_argv_launch_form_defaults_to_read_only():
+    """An unconfigured machine keeps the safe default — the ratchet is not loosened by this change."""
+    argv = build_simple_harness_argv(
+        model_target="m", task=None, cfg=_SimpleHarnessCfg(),
+    )
+    assert argv[-2:] == ["--permission", "read_only"]
+
+
+def test_simple_harness_argv_refuses_unknown_permission():
+    """An unknown mode is REFUSED, never downgraded — a typo must not silently produce read_only."""
+    try:
+        build_simple_harness_argv(model_target="m", task=None, cfg=_BadPermissionCfg())
+        assert False, "expected ValueError"
+    except ValueError as exc:
+        msg = str(exc)
+        assert "simple-harness" in msg
+        assert "workspace-write" in msg
+        assert "workspace_write" in msg
 
 
 def test_simple_harness_argv_launch_form_still_refuses_empty_bin():
@@ -913,3 +961,40 @@ def test_simple_harness_workdir_env_override_takes_precedence():
         os.environ["SIMPLE_HARNESS_WORKDIR"] = "/opt/work"
         from harness_allocator import config
         assert config.get_simple_harness_workdir() == "/opt/work"
+
+
+def test_simple_harness_permission_defaults_to_read_only(monkeypatch):
+    """get_simple_harness_permission() == 'read_only' when nothing is configured.
+
+    ``_ini`` is stubbed so the assertion measures the DEFAULT rather than
+    whatever this machine's committed ini happens to say — the machine
+    configures workspace_write, and a test reading it would assert the
+    host's policy instead of the code's default.
+    """
+    from harness_allocator import config
+    monkeypatch.delenv("SIMPLE_HARNESS_PERMISSION", raising=False)
+    monkeypatch.setattr(config, "_ini", lambda *a, **k: None)
+    assert config.get_simple_harness_permission() == "read_only"
+
+
+def test_simple_harness_permission_env_overrides_ini(monkeypatch):
+    """SIMPLE_HARNESS_PERMISSION wins over the ini — the per-launch scoping seam."""
+    from harness_allocator import config
+    monkeypatch.setattr(config, "_ini", lambda *a, **k: "read_only")
+    monkeypatch.setenv("SIMPLE_HARNESS_PERMISSION", "full_access")
+    assert config.get_simple_harness_permission() == "full_access"
+
+
+def test_simple_harness_permission_read_from_ini(monkeypatch):
+    """The ini value is used when no env var is set."""
+    from harness_allocator import config
+    monkeypatch.delenv("SIMPLE_HARNESS_PERMISSION", raising=False)
+    monkeypatch.setattr(
+        config, "_ini",
+        lambda section, key, fallback=None: (
+            "workspace_write" if (section, key) == ("simple-harness", "permission")
+            else None
+        ),
+    )
+    assert config.get_simple_harness_permission() == "workspace_write"
+
