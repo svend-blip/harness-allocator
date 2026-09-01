@@ -170,8 +170,31 @@ _LAUNCH_SPEC_SUPPORTED = {
         # no persistent process; no required env (the harness reads
         # SIMPLE_HARNESS_API_KEY from the parent env only when wired via
         # cfg.get_simple_harness_api_key_env, which is an adapter detail,
-        # not a launchspec gate). mirror crush / qwen / goose.
-        "mode": "one_shot",
+        # not a launchspec gate).
+        #
+        # TERMINAL_WRAPPED, not one_shot — measured 2026-09-01, the first
+        # time a DPMtF role actually ran on this harness (flow 9000-02-ELOOP;
+        # 1010's roles are opencode/claude-code, so this path had never been
+        # exercised).
+        #
+        # ``one_shot`` makes start_coding._launch_decisions_for return
+        # terminal_wrapped=False, which launches the bare binary in the pane.
+        # The bare binary is simple-harness's INTERACTIVE mode, and interactive
+        # mode calls loop.RunOne, not RunAgent
+        # (cmd/simple-harness/main.go:954, documented at :719 — "Interactive
+        # mode stays on RunOne (single-turn)"). RunOne performs one model
+        # round trip and never dispatches a tool call, so a role dispatched
+        # into such a pane can advertise tools, narrate a plan, and finish
+        # its turn having done nothing. Measured: the 9000 decomposer's
+        # session emitted 1 model_request, 35 assistant_stream chunks and
+        # ZERO tool_call events; the identical prompt through
+        # ``simple-harness run`` produced two tool_calls and exit 0.
+        #
+        # terminal_wrapped routes each dispatch through harness_terminal.py,
+        # which calls harness.build_task_invocation -> the adapter's RUN form
+        # -> RunAgent with the tool registry and a real max-turns budget.
+        # That is the only mode in which this harness can execute a handoff.
+        "mode": "terminal_wrapped",
         "needs_initial_prompt": False,
         "anchor": "none",
         "required_env": [],

@@ -584,3 +584,24 @@ def test_get_reset_spec_returns_fresh_dict_per_call(harness):
     assert a is not b
     a["command"] = "MUTATION_SENTINEL"
     assert get_reset_spec(harness)["command"] != "MUTATION_SENTINEL"
+
+
+def test_simple_harness_is_terminal_wrapped():
+    """simple-harness MUST be terminal_wrapped, or a role on it cannot act.
+
+    Measured 2026-09-01 (flow 9000-02-ELOOP, the first DPMtF role ever to run
+    on this harness): with mode ``one_shot``,
+    ``start_coding._launch_decisions_for`` returns terminal_wrapped=False and
+    launches the bare binary, which is simple-harness's INTERACTIVE mode.
+    Interactive mode calls ``loop.RunOne`` — one model round trip, no tool
+    dispatch (cmd/simple-harness/main.go:954, documented at :719). The
+    dispatched decomposer emitted 1 model_request, 35 assistant_stream chunks
+    and ZERO tool_calls; the same prompt through ``simple-harness run``
+    produced two tool_calls and exit 0.
+
+    Only terminal_wrapped routes a dispatch through harness_terminal.py into
+    the adapter's RUN form, which is where RunAgent, the tool registry and the
+    max-turns budget live.
+    """
+    from harness_allocator.launchspec import get_launch_spec
+    assert get_launch_spec("simple-harness")["mode"] == "terminal_wrapped"
