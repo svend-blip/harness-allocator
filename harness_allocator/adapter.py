@@ -1007,6 +1007,18 @@ def build_simple_harness_env(model_target=None, cfg=None) -> dict:
         key = os.environ.get(name)
         if key:
             env["SIMPLE_HARNESS_API_KEY"] = key
+    # The harness's own 30s default is a per-request ceiling an agentic role
+    # cannot meet while generating a document — measured: a decomposer
+    # cancelled at exactly 30.001s, INTERRUPTED, exit 6, with nothing wrong
+    # but the clock.
+    #
+    # Added only to an already-populated env, never to an empty one: the
+    # empty dict is this builder's documented signal that nothing is wired
+    # and the child should inherit the parent environment. Turning that into
+    # a one-key dict would silently change the caller's fallback.
+    if env:
+        env["SIMPLE_HARNESS_REQUEST_TIMEOUT"] = cfg.get_simple_harness_request_timeout()
+
     return env
 
 

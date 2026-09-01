@@ -83,3 +83,9 @@ simple_harness_bin = ../simple-harness/bin/simple-harness
 ; to one role instead by setting SIMPLE_HARNESS_PERMISSION in that role's
 ; launch environment; the env var overrides this value.
 ; permission = read_only
+; Model request timeout (Go duration: "300s", "5m"). Default 300s.
+; The harness's OWN default is 30s — a chat default, and a hard ceiling on a
+; single model round trip. An agentic role generating a document exceeds it:
+; measured, a role read its contracts, began composing, and was cancelled at
+; exactly 30.001s with INTERRUPTED and exit 6.
+; request_timeout = 300s

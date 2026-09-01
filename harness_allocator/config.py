@@ -658,6 +658,28 @@ def get_simple_harness_permission() -> str:
     return (configured or "read_only").strip()
 
 
+def get_simple_harness_request_timeout() -> str:
+    """Model request timeout. Env ``SIMPLE_HARNESS_REQUEST_TIMEOUT``, ini ``[simple-harness] request_timeout``, or ``300s``.
+
+    The harness's OWN default is 30s (internal/config/config.go:104), which
+    is a chat default: it is the ceiling on a single model round trip, and an
+    agentic role composing a document blows through it. Measured 2026-09-01
+    on flow 9000-02-ELOOP — a decomposer read its governance, GOAL and ledger
+    in three tool calls, began generating the handoff, and the request was
+    cancelled exactly 30.001s later with status INTERRUPTED and exit code 6.
+    Nothing was wrong with the model, the endpoint or the prompt.
+
+    The allocator therefore launches agentic roles with a 300s ceiling. The
+    harness's own default is untouched; this is the launcher's opinion about
+    the workload it launches. Go duration syntax ("300s", "5m").
+    """
+    env = os.environ.get("SIMPLE_HARNESS_REQUEST_TIMEOUT")
+    if env:
+        return env.strip()
+    configured = _ini("simple-harness", "request_timeout")
+    return (configured or "300s").strip()
+
+
 # ── MCP-Light capability surface (Run 004 / Objective A) ─────────────
 #
 # MCP-Light is a governed, OPTIONAL capability: defaults are empty/false so

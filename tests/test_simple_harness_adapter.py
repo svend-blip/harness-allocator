@@ -118,6 +118,9 @@ class _SimpleHarnessCfg:
     def get_simple_harness_permission(self):
         return "read_only"
 
+    def get_simple_harness_request_timeout(self):
+        return "300s"
+
 
 class _SimpleHarnessCfgFull(_SimpleHarnessCfg):
     """Cfg variant with all knobs configured (base_url with /v1, key, workdir)."""
@@ -909,11 +912,17 @@ def test_simple_harness_api_key_env_default_is_empty():
         assert config.get_simple_harness_api_key_env() == ""
 
 
-def test_simple_harness_max_turns_default_is_8():
-    """get_simple_harness_max_turns() == 8 when SIMPLE_HARNESS_MAX_TURNS is unset (the harness's own default)."""
-    with _UnsetEnv():
-        from harness_allocator import config
-        assert config.get_simple_harness_max_turns() == 8
+def test_simple_harness_max_turns_default_is_8(monkeypatch):
+    """get_simple_harness_max_turns() == 8 when nothing is configured (the harness's own default).
+
+    ``_ini`` is stubbed so this measures the CODE default. Reading the real
+    ini made it assert whatever this host happens to configure — it passed
+    only while no machine had set the key, and broke the moment one did.
+    """
+    from harness_allocator import config
+    monkeypatch.delenv("SIMPLE_HARNESS_MAX_TURNS", raising=False)
+    monkeypatch.setattr(config, "_ini", lambda *a, **k: None)
+    assert config.get_simple_harness_max_turns() == 8
 
 
 def test_simple_harness_workdir_default_is_empty():
@@ -1012,3 +1021,22 @@ def test_simple_harness_argv_run_form_emits_configured_permission():
         model_target="m", task="t", cfg=_WorkspaceWriteCfg(),
     )
     assert argv[argv.index("--permission") + 1] == "workspace_write"
+
+
+def test_simple_harness_request_timeout_default_is_300s(monkeypatch):
+    """The launcher's agentic default, not the harness's 30s chat default."""
+    from harness_allocator import config
+    monkeypatch.delenv("SIMPLE_HARNESS_REQUEST_TIMEOUT", raising=False)
+    monkeypatch.setattr(config, "_ini", lambda *a, **k: None)
+    assert config.get_simple_harness_request_timeout() == "300s"
+
+
+def test_simple_harness_env_carries_request_timeout():
+    """A wired child env carries the timeout — the 30s ceiling killed a real dispatch."""
+    env = build_simple_harness_env(model_target="m", cfg=_SimpleHarnessCfg())
+    assert env["SIMPLE_HARNESS_REQUEST_TIMEOUT"] == "300s"
+
+
+def test_simple_harness_env_stays_empty_without_wiring():
+    """An unwired env stays {} — that empty dict means "inherit the parent"."""
+    assert build_simple_harness_env(model_target="", cfg=_NothingCfg()) == {}
