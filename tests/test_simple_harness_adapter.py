@@ -1058,16 +1058,21 @@ def test_simple_harness_argv_omits_skill_when_unconfigured():
     assert "--skill" not in argv
 
 
-def test_simple_harness_argv_skill_precedes_the_run_subcommand():
-    """--skill is a GLOBAL flag, so it must come before `run`, not after it.
+def test_simple_harness_argv_skill_follows_the_run_subcommand():
+    """--skill must come AFTER `run`, never before it.
 
-    Placed after the subcommand the harness would reject it. The contract's
-    usage is `simple-harness [flags] [subcommand]` and the flag's own row says
-    it applies to every subcommand and to interactive mode.
+    The harness recognises the subcommand only as its first argument
+    (cmd/simple-harness/main.go: ``args[0] == "run"``). With ``--skill``
+    first, ``run`` is never seen, the process enters INTERACTIVE mode and
+    waits on stdin forever. Measured on flow 9000-02-ELOOP on 2026-09-01: a
+    dispatched decomposer sat 62 minutes with zero model requests, then
+    exit 6 on Ctrl-C. ``run`` has its own ``--skill`` flag, so placing it
+    after the subcommand is what the harness actually accepts.
     """
     argv = build_simple_harness_argv(model_target="m", task="t", cfg=_SkillCfg())
     assert argv[argv.index("--skill") + 1] == "9000"
-    assert argv.index("--skill") < argv.index("run")
+    assert argv.index("run") < argv.index("--skill")
+    assert argv.index("run") == 1
 
 
 def test_simple_harness_argv_launch_form_carries_skill():

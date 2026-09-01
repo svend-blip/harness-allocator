@@ -883,15 +883,23 @@ def build_simple_harness_argv(model_target=None, task=None, cfg=None) -> list:
             "(empty SIMPLE_HARNESS_BIN / [simple-harness] bin)"
         )
     permission = _simple_harness_permission(cfg)
-    # --skill is a GLOBAL flag: it applies to the interactive session and to
-    # `run` alike, so it is emitted before the subcommand in both forms.
-    # Empty means omit, keeping an unconfigured machine byte-identical.
+    # --skill exists on BOTH forms, but its POSITION differs and the
+    # difference is not cosmetic. The harness recognises `run` only as its
+    # first argument (cmd/simple-harness/main.go: ``args[0] == "run"``);
+    # anything before it drops the process into INTERACTIVE mode, which
+    # reads stdin. Emitted before the subcommand, a configured skill turned
+    # every dispatch into a REPL waiting on a pipe nobody writes to —
+    # measured on flow 9000-02-ELOOP 2026-09-01: 62 minutes, zero model
+    # requests, exit 6 on Ctrl-C. So the LAUNCH form (no subcommand) takes
+    # it as a leading flag and the RUN form takes it after `run`, where the
+    # subcommand's own flag set defines it. Empty means omit in both forms,
+    # keeping an unconfigured machine byte-identical.
     skill = (cfg.get_simple_harness_skill() or "").strip()
-    if skill:
-        parts += ["--skill", skill]
     if task is None:
         # LAUNCH form: interactive session for a resident role pane.
         # Endpoint/model are the env builder's contract in this form.
+        if skill:
+            parts += ["--skill", skill]
         workdir = (cfg.get_simple_harness_workdir() or "").strip()
         if workdir:
             parts += ["--workspace", workdir]
@@ -925,6 +933,8 @@ def build_simple_harness_argv(model_target=None, task=None, cfg=None) -> list:
             "(empty model_target — required by the harness SCOPE §28)"
         )
     parts += ["run", "--base-url", base_url, "--model", model]
+    if skill:
+        parts += ["--skill", skill]
     workdir = (cfg.get_simple_harness_workdir() or "").strip()
     if workdir:
         parts += ["--workspace", workdir]
