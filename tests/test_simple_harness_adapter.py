@@ -121,6 +121,9 @@ class _SimpleHarnessCfg:
     def get_simple_harness_request_timeout(self):
         return "300s"
 
+    def get_simple_harness_skill(self):
+        return ""
+
 
 class _SimpleHarnessCfgFull(_SimpleHarnessCfg):
     """Cfg variant with all knobs configured (base_url with /v1, key, workdir)."""
@@ -1040,3 +1043,34 @@ def test_simple_harness_env_carries_request_timeout():
 def test_simple_harness_env_stays_empty_without_wiring():
     """An unwired env stays {} — that empty dict means "inherit the parent"."""
     assert build_simple_harness_env(model_target="", cfg=_NothingCfg()) == {}
+
+
+class _SkillCfg(_SimpleHarnessCfg):
+    """Cfg that names a cold-start skill."""
+
+    def get_simple_harness_skill(self):
+        return "9000"
+
+
+def test_simple_harness_argv_omits_skill_when_unconfigured():
+    """No skill configured -> no --skill flag, argv byte-identical to before."""
+    argv = build_simple_harness_argv(model_target="m", task=None, cfg=_SimpleHarnessCfg())
+    assert "--skill" not in argv
+
+
+def test_simple_harness_argv_skill_precedes_the_run_subcommand():
+    """--skill is a GLOBAL flag, so it must come before `run`, not after it.
+
+    Placed after the subcommand the harness would reject it. The contract's
+    usage is `simple-harness [flags] [subcommand]` and the flag's own row says
+    it applies to every subcommand and to interactive mode.
+    """
+    argv = build_simple_harness_argv(model_target="m", task="t", cfg=_SkillCfg())
+    assert argv[argv.index("--skill") + 1] == "9000"
+    assert argv.index("--skill") < argv.index("run")
+
+
+def test_simple_harness_argv_launch_form_carries_skill():
+    """The interactive LAUNCH form carries it too — same global flag."""
+    argv = build_simple_harness_argv(model_target="m", task=None, cfg=_SkillCfg())
+    assert argv[argv.index("--skill") + 1] == "9000"

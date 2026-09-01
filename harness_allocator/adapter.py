@@ -883,6 +883,12 @@ def build_simple_harness_argv(model_target=None, task=None, cfg=None) -> list:
             "(empty SIMPLE_HARNESS_BIN / [simple-harness] bin)"
         )
     permission = _simple_harness_permission(cfg)
+    # --skill is a GLOBAL flag: it applies to the interactive session and to
+    # `run` alike, so it is emitted before the subcommand in both forms.
+    # Empty means omit, keeping an unconfigured machine byte-identical.
+    skill = (cfg.get_simple_harness_skill() or "").strip()
+    if skill:
+        parts += ["--skill", skill]
     if task is None:
         # LAUNCH form: interactive session for a resident role pane.
         # Endpoint/model are the env builder's contract in this form.

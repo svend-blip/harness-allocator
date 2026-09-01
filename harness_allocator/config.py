@@ -680,6 +680,28 @@ def get_simple_harness_request_timeout() -> str:
     return (configured or "300s").strip()
 
 
+def get_simple_harness_skill() -> str:
+    """Skill loaded at launch. Env ``SIMPLE_HARNESS_SKILL``, ini ``[simple-harness] skill``, or empty.
+
+    Empty (the default) emits no ``--skill`` flag, so an unconfigured machine
+    is byte-identical to before. A configured name is resolved by the harness
+    against its own search roots — ``<workspace>/.simple-harness/skills/``,
+    ``<HOME>/.simple-harness/skills/`` and any ``--skills-dir`` override —
+    and composed into the model context at the SCOPE §14 skills position,
+    between the governance block and the task.
+
+    This is the sanctioned way to give a role its cold-start procedure. The
+    alternative — pasting instructions into the role's prompt — substitutes
+    the operator's prose for the role's own governance, which is how a
+    governed role stops being governed.
+    """
+    env = os.environ.get("SIMPLE_HARNESS_SKILL")
+    if env:
+        return env.strip()
+    configured = _ini("simple-harness", "skill")
+    return (configured or "").strip()
+
+
 # ── MCP-Light capability surface (Run 004 / Objective A) ─────────────
 #
 # MCP-Light is a governed, OPTIONAL capability: defaults are empty/false so
