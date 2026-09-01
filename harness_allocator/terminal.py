@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import errno
+import json
 import os
 import signal
 import sys
@@ -120,6 +121,145 @@ def _ready_line(role):
     return f"\nStatus: {READY}\n\n{role}> "
 
 
+# ── child output rendering ─────────────────────────────────────────
+
+
+_THINK_RE = None
+
+
+def _collapse_thinking(text):
+    """Replace <think>…</think> blocks with a one-line marker.
+
+    A reasoning block is the bulk of a chat-model turn and none of it is
+    the deliverable; the pane needs to know it happened and how big it was,
+    not read it. An unterminated block is marked as such — that is the
+    shape of a turn cut at the output ceiling (measured 2026-09-01 on
+    9000-implementer: 33,630 characters, no closing tag, exit 0), and it
+    must be visible as a defect rather than scroll past as prose.
+    """
+    global _THINK_RE
+    if _THINK_RE is None:
+        import re
+        _THINK_RE = re.compile(r"<think>(.*?)</think>", re.S)
+    text = _THINK_RE.sub(lambda m: f"[thinking: {len(m.group(1))} chars]", text)
+    open_at = text.rfind("<think>")
+    if open_at != -1:
+        body = text[open_at + len("<think>"):]
+        text = text[:open_at] + f"[thinking, UNTERMINATED: {len(body)} chars]"
+    return text
+
+
+def _render_tool_result(event, names):
+    call_id = event.get("call_id")
+    name = event.get("tool") or names.pop(call_id, None) or "?"
+    content = event.get("content") or ""
+    status = event.get("tool_result_status") or ""
+    detail = ""
+    try:
+        parsed = json.loads(content) if isinstance(content, str) else content
+    except ValueError:
+        parsed = None
+    if isinstance(parsed, dict):
+        if "kind" in parsed:
+            detail = f"{parsed.get('kind')}: {str(parsed.get('message', ''))[:160]}"
+            status = status or "error"
+        elif "exit_code" in parsed:
+            detail = f"exit={parsed.get('exit_code')}"
+            dur = parsed.get("duration")
+            if dur:
+                detail += f" ({dur})"
+    line = f"[tool] {name}"
+    if status and status != "ok":
+        line += f" {status.upper()}"
+    if detail:
+        line += f" {detail}"
+    return line
+
+
+def render_child_output(out):
+    """Render a harness's JSONL event stream as readable text.
+
+    The one-shot harness is launched with ``--output jsonl`` so the runner
+    can read status and exit code by machine; the pane, though, is read by
+    a person. Every line that is a JSON object carrying an ``event`` key is
+    rendered: assistant deltas are joined into prose (reasoning collapsed),
+    each tool result becomes one line, status changes and the completion
+    are kept, and a summary counts model requests, tool calls and tool
+    errors. If ANY non-empty line is not such an object the whole output
+    is returned verbatim — a harness that does not speak this protocol, or
+    a mixed stream, is shown exactly as it was, never half-rendered. The
+    full event stream stays in the harness's own session log on disk.
+    """
+    events = []
+    for line in out.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            obj = json.loads(stripped)
+        except ValueError:
+            return out
+        if not isinstance(obj, dict) or "event" not in obj:
+            return out
+        events.append(obj)
+    if not events:
+        return out
+
+    rendered = []
+    text = []
+    names = {}
+    requests = calls = errors = 0
+
+    def flush_text():
+        if not text:
+            return
+        block = _collapse_thinking("".join(text)).strip()
+        text.clear()
+        if block:
+            rendered.append(block)
+
+    for event in events:
+        kind = event.get("event")
+        if kind == "assistant_stream":
+            text.append(str(event.get("delta", "")))
+            continue
+        if kind == "model_request":
+            requests += 1
+            continue
+        if kind == "tool_call":
+            calls += 1
+            names[event.get("call_id")] = event.get("tool") or "?"
+            continue
+        flush_text()
+        if kind == "started":
+            cfg = event.get("config") or {}
+            rendered.append(
+                f"[started] session {str(event.get('session_id', ''))[:8]} "
+                f"model={cfg.get('model', '')} workspace={cfg.get('workspace', '')} "
+                f"permission={cfg.get('permission', '')}"
+            )
+        elif kind == "tool_result":
+            line = _render_tool_result(event, names)
+            if "ERROR" in line or "FAILED" in line:
+                errors += 1
+            rendered.append(line)
+        elif kind == "status":
+            status = str(event.get("status", ""))
+            if status != "STREAMING":
+                rendered.append(f"[status] {status}")
+        elif kind == "completed":
+            rendered.append(f"[completed] exit={event.get('exit_code', 0)}")
+        elif kind == "interrupted":
+            rendered.append("[interrupted]")
+        else:
+            rendered.append(f"[{kind}]")
+    flush_text()
+    rendered.append(
+        f"[turns] {requests} model requests, {calls} tool calls, {errors} tool errors"
+    )
+    return "\n".join(rendered)
+
+
 def run_terminal(*, role, harness, model_target, cwd, flow="", reader, writer,
                  runner=None, heartbeat_interval=15.0, timeout=None,
                  status_info=None, runtime_info=None, cancel_event=None,
@@ -192,10 +332,22 @@ def run_terminal(*, role, harness, model_target, cwd, flow="", reader, writer,
             writer.write(f"pid: {payload.get('pid')}\n")
             writer.write(f"elapsed: {_fmt_elapsed(payload.get('elapsed', 0.0))}\n")
         elif kind == "HEARTBEAT":
-            writer.write("[HEARTBEAT]\n")
-            writer.write(f"request_id: {payload.get('request_id')}\n")
-            writer.write(f"process_alive: {str(payload.get('process_alive', True)).lower()}\n")
-            writer.write(f"elapsed: {_fmt_elapsed(payload.get('elapsed', 0.0))}\n")
+            # One line. The phase and activity come from the runner's live
+            # read of the harness's event stream (invoke.ProgressTracker), so
+            # the pane says what the role is doing — a tool call, a model
+            # request, a reply streaming — not only that the process lives.
+            phase = payload.get("phase")
+            head = f"[HEARTBEAT - {phase}]" if phase else "[HEARTBEAT]"
+            parts = [head, str(payload.get("request_id")),
+                     _fmt_elapsed(payload.get("elapsed", 0.0))]
+            if payload.get("activity"):
+                parts.append(payload["activity"])
+                parts.append(f"{payload.get('model_requests', 0)} req / "
+                             f"{payload.get('tool_calls', 0)} calls / "
+                             f"{payload.get('tool_errors', 0)} err")
+            else:
+                parts.append("alive" if payload.get("process_alive", True) else "not alive")
+            writer.write(" · ".join(parts) + "\n")
         writer.flush()
 
     try:
@@ -281,7 +433,7 @@ def run_terminal(*, role, harness, model_target, cwd, flow="", reader, writer,
             out = (result.get("output") or "").strip()
             err = (result.get("error") or "").strip()
             if out:
-                writer.write(out + "\n")
+                writer.write(render_child_output(out) + "\n")
             if err:
                 writer.write(f"[stderr] {err}\n")
             writer.write(_ready_line(role))

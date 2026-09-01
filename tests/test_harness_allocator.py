@@ -808,8 +808,7 @@ def test_terminal_prints_running_and_heartbeat_from_events():
     assert "[RUNNING]" in out
     assert "DeepSeek Harness / DeepSeek V4 Pro" in out
     assert "pid: 7" in out
-    assert "[HEARTBEAT]" in out
-    assert "process_alive: true" in out
+    assert "[HEARTBEAT] · ha-0 · 1.50s · alive" in out
 
 
 # ── terminal surface ────────────────────────────────────────────────

@@ -30,6 +30,7 @@ import os
 import shlex
 import signal
 import subprocess
+import json
 import threading
 import time as _time
 
@@ -225,6 +226,96 @@ def execute(role="", harness=None, model_target="", cwd=None, task="", cfg=None,
             _lease_release(lease)
 
 
+class ProgressTracker:
+    """What the harness is doing right now, read from its live stdout.
+
+    A one-shot harness that emits JSONL events (simple-harness: started /
+    model_request / assistant_stream / tool_call / tool_result / status /
+    completed) tells us its phase line by line. The tracker keeps a phase
+    — MODEL, STREAMING, TOOL, STATUS, OUTPUT or IDLE — a one-line activity
+    and running counts, so a heartbeat can say "tool shell #12 running"
+    instead of only "process_alive: true". Non-JSON output is counted, never
+    parsed, so a harness with another output shape degrades to a line
+    count rather than an error. Every method is safe to call from the
+    drainer thread and the heartbeat loop concurrently: the state is a
+    handful of scalars updated under one lock.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.phase = "IDLE"
+        self.activity = "waiting for output"
+        self.requests = 0
+        self.calls = 0
+        self.errors = 0
+        self.stream_chars = 0
+        self.other_lines = 0
+        self._tool_by_call = {}
+
+    def feed(self, line):
+        stripped = line.strip()
+        if not stripped:
+            return
+        obj = None
+        if stripped.startswith("{"):
+            try:
+                obj = json.loads(stripped)
+            except ValueError:
+                obj = None
+        with self._lock:
+            if not isinstance(obj, dict) or "event" not in obj:
+                self.other_lines += 1
+                self.phase = "OUTPUT"
+                self.activity = f"{self.other_lines} output lines"
+                return
+            kind = obj.get("event")
+            if kind == "model_request":
+                self.requests += 1
+                self.stream_chars = 0
+                self.phase = "MODEL"
+                self.activity = f"model request #{self.requests}"
+            elif kind == "assistant_stream":
+                self.stream_chars += len(str(obj.get("delta", "")))
+                self.phase = "STREAMING"
+                self.activity = (f"streaming reply #{self.requests} "
+                                 f"({self.stream_chars} chars)")
+            elif kind == "tool_call":
+                self.calls += 1
+                tool = obj.get("tool") or "?"
+                self._tool_by_call[obj.get("call_id")] = tool
+                self.phase = "TOOL"
+                self.activity = f"tool {tool} #{self.calls} running"
+            elif kind == "tool_result":
+                tool = obj.get("tool") or self._tool_by_call.pop(obj.get("call_id"), "?")
+                status = obj.get("tool_result_status") or "ok"
+                if status != "ok":
+                    self.errors += 1
+                self.phase = "TOOL"
+                self.activity = f"tool {tool} #{self.calls} {status}"
+            elif kind == "status":
+                status = str(obj.get("status", ""))
+                if status != "STREAMING":
+                    self.phase = "STATUS"
+                    self.activity = status[:80]
+            elif kind == "started":
+                self.phase = "MODEL"
+                self.activity = "session started"
+            elif kind in ("completed", "interrupted"):
+                self.phase = "STATUS"
+                self.activity = kind
+
+    def snapshot(self):
+        with self._lock:
+            return {
+                "phase": self.phase,
+                "activity": self.activity,
+                "model_requests": self.requests,
+                "tool_calls": self.calls,
+                "tool_errors": self.errors,
+            }
+
+
+
 def run_argv(argv, *, cwd, timeout=None, heartbeat_interval=15.0,
              on_event=None, event_context=None, cancel_event=None,
              cancel_callback=None,
@@ -285,11 +376,45 @@ def run_argv(argv, *, cwd, timeout=None, heartbeat_interval=15.0,
         on_event(RUNNING, {**ctx, "pid": pid, "elapsed": 0.0, "process_alive": True})
 
     captured = {}
+    progress = ProgressTracker()
 
     def _capture():
-        out, err = proc.communicate()
-        captured["out"] = out or ""
-        captured["err"] = err or ""
+        # Read stdout LINE BY LINE so progress is visible while the harness
+        # runs; communicate() would hand us everything only at exit, which is
+        # exactly when a heartbeat no longer needs it. stderr is drained on
+        # its own thread so a chatty child can never block on a full pipe.
+        # A process object without line-readable pipes (the test fakes, a
+        # caller that pre-wired communicate()) keeps the historical path.
+        stdout = getattr(proc, "stdout", None)
+        stderr = getattr(proc, "stderr", None)
+        if stdout is None or not hasattr(stdout, "readline"):
+            out, err = proc.communicate()
+            captured["out"] = out or ""
+            captured["err"] = err or ""
+            return
+        err_box = {"err": ""}
+
+        def _drain_err():
+            try:
+                err_box["err"] = stderr.read() or "" if stderr is not None else ""
+            except (OSError, ValueError):
+                err_box["err"] = ""
+        err_thread = threading.Thread(target=_drain_err, daemon=True)
+        err_thread.start()
+        lines = []
+        try:
+            for line in iter(stdout.readline, ""):
+                lines.append(line)
+                progress.feed(line)
+        except (OSError, ValueError):
+            pass
+        err_thread.join()
+        try:
+            proc.wait()
+        except Exception:  # noqa: BLE001 — the poll loop owns the exit code
+            pass
+        captured["out"] = "".join(lines)
+        captured["err"] = err_box["err"]
 
     drainer = threading.Thread(target=_capture, daemon=True)
     drainer.start()
@@ -330,7 +455,8 @@ def run_argv(argv, *, cwd, timeout=None, heartbeat_interval=15.0,
             if on_event:
                 on_event(
                     "HEARTBEAT",
-                    {**ctx, "pid": pid, "elapsed": now - start, "process_alive": True},
+                    {**ctx, "pid": pid, "elapsed": now - start, "process_alive": True,
+                     **progress.snapshot()},
                 )
             last_hb = now
         _time.sleep(0.2)
