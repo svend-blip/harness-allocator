@@ -76,7 +76,85 @@ def _label(labels, key):
 
 
 def _fmt_elapsed(seconds):
-    return f"{float(seconds):.2f}s"
+    """Whole seconds for the heartbeat: ``35s``."""
+    return f"{int(float(seconds))}s"
+
+
+def _fmt_duration(seconds):
+    """One decimal for the completion line: ``88.8s``."""
+    return f"{float(seconds):.1f}s"
+
+
+# ── colour ──────────────────────────────────────────────────────────
+#
+# The renderer (invoke.LiveRenderer) returns plain text plus a kind; only
+# the terminal paints, and only when the pane is a tty or asked to. The
+# palette is deliberately small: grey for what is routine, red for what
+# failed, green for success, yellow for a state worth a glance.
+
+_SGR = {
+    "grey": "\x1b[90m",
+    "red": "\x1b[31m",
+    "green": "\x1b[32m",
+    "yellow": "\x1b[33m",
+}
+_SGR_RESET = "\x1b[0m"
+
+#: Fragment / block kind -> palette entry. Kinds absent here stay plain.
+_PALETTE = {
+    "dispatch": "grey",
+    "running": "grey",
+    "started": "grey",
+    "tool": "grey",
+    "thinking": "grey",
+    "heartbeat": "grey",
+    "tool_error": "red",
+    "failed": "red",
+    "success": "green",
+    "status": "yellow",
+    "cancelled": "yellow",
+    "duplicate": "yellow",
+}
+
+_STATUS_FAILURE_MARKERS = ("OVERFLOW", "FAILED", "ERROR")
+
+
+def color_enabled(writer, color=None):
+    """Whether ``writer`` gets ANSI colour.
+
+    An explicit ``color`` wins; then ``NO_COLOR`` (any non-empty value)
+    disables; then ``HARNESS_TERMINAL_COLOR=1`` enables; otherwise colour
+    follows ``writer.isatty()``. A StringIO in a test is never a tty, so
+    plain-text assertions hold unless the test asks for colour.
+    """
+    if color is not None:
+        return bool(color)
+    if os.environ.get("NO_COLOR"):
+        return False
+    if os.environ.get("HARNESS_TERMINAL_COLOR") == "1":
+        return True
+    isatty = getattr(writer, "isatty", None)
+    try:
+        return bool(isatty()) if callable(isatty) else False
+    except (OSError, ValueError):
+        return False
+
+
+def paint(kind, text, color=True):
+    """``text`` wrapped in the SGR colour for ``kind``, or unchanged.
+
+    A ``status`` line that names a failure (``TOOL_DISPATCH_OVERFLOW …``)
+    is painted red rather than yellow; prose and passthrough lines are
+    never painted, for readability.
+    """
+    if not color or not text:
+        return text
+    name = _PALETTE.get(kind)
+    if kind == "status" and any(marker in text for marker in _STATUS_FAILURE_MARKERS):
+        name = "red"
+    if name is None:
+        return text
+    return f"{_SGR[name]}{text}{_SGR_RESET}"
 
 
 def _runtime_info(status_info=None, runtime_info=None):
@@ -153,11 +231,12 @@ def render_child_output(out):
     can read status and exit code by machine; the pane, though, is read by
     a person. The same :class:`~harness_allocator.invoke.LiveRenderer` that
     paints the pane while the harness runs is driven here over the whole
-    buffer: assistant deltas become prose (reasoning collapsed to a
-    marker), each tool result one line, status changes and the completion
-    kept, and a closing summary counts model requests, tool calls and tool
-    errors. Output that is not a pure event stream is returned verbatim.
-    The full event stream stays in the harness's own session log on disk.
+    buffer, so the text is the one the pane would have shown live:
+    assistant deltas become prose (reasoning collapsed to a marker), runs
+    of identical tool results one ``×N`` line, informative status changes
+    kept. The counts belong to the completion line, not to this block.
+    Output that is not a pure event stream is returned verbatim. The full
+    event stream stays in the harness's own session log on disk.
     """
     events = _parse_events(out)
     if events is None:
@@ -167,16 +246,18 @@ def render_child_output(out):
     for event in events:
         rendered.extend(renderer.feed_event(event))
     rendered.extend(renderer.flush())
-    rendered.append(renderer.summary())
-    return "\n".join(rendered)
+    return "\n".join(text for text, _kind in rendered)
 
 
-def child_output_summary(out):
-    """The ``[turns] …`` line for a finished event stream, or ``None``.
+def child_output_stats(out):
+    """What the completion line says about a finished event stream, or ``None``.
 
-    Used when the pane already showed the stream live and only the closing
-    count is still owed; it is derived from the same renderer so it can
-    never disagree with what was printed.
+    ``tail`` is ``11 req / 17 calls / 3 err``; ``exit_code`` is the child's
+    own ``completed`` exit code (``None`` if the stream had none);
+    ``last_status`` is the last status that was neither STREAMING nor a
+    terminal state — the overflow text on a max-turns failure. Derived from
+    the same renderer that painted the pane, so it can never disagree with
+    what was printed.
     """
     events = _parse_events(out)
     if events is None:
@@ -184,13 +265,42 @@ def child_output_summary(out):
     renderer = LiveRenderer()
     for event in events:
         renderer.feed_event(event)
-    return renderer.summary()
+    renderer.flush()
+    return {"tail": renderer.tail(), "exit_code": renderer.exit_code,
+            "last_status": renderer.last_status, **renderer.counts()}
+
+
+def render_completion(status, request_id, elapsed, stats=None, exit_code=None):
+    """The one completion line: ``[SUCCESS] ha-000001 · 88.8s · 11 req / 17 calls / 3 err``.
+
+    Returns ``(text, kind)``. ``ERROR`` shows as ``[FAILED]`` and adds
+    ``exit=N`` (when known) and the last informative status of the child.
+    """
+    if status == SUCCESS:
+        label, kind = "[SUCCESS]", "success"
+    elif status == ERROR:
+        label, kind = "[FAILED]", "failed"
+    elif status == CANCELLED:
+        label, kind = "[CANCELLED]", "cancelled"
+    else:
+        label, kind = f"[{status}]", "status"
+    parts = [str(request_id), _fmt_duration(elapsed)]
+    if stats:
+        parts.append(stats["tail"])
+    if status == ERROR:
+        if exit_code is None and stats:
+            exit_code = stats.get("exit_code")
+        if exit_code is not None:
+            parts.append(f"exit={exit_code}")
+        if stats and stats.get("last_status"):
+            parts.append(stats["last_status"])
+    return f"{label} " + " · ".join(parts), kind
 
 
 def run_terminal(*, role, harness, model_target, cwd, flow="", reader, writer,
                  runner=None, heartbeat_interval=15.0, timeout=None,
                  status_info=None, runtime_info=None, cancel_event=None,
-                 cancel_callback=None) -> int:
+                 cancel_callback=None, color=None) -> int:
     """Run the persistent READY -> execute -> READY loop.
 
     The optional ``cancel_event`` is shared with the active runner.  A SIGINT
@@ -198,9 +308,16 @@ def run_terminal(*, role, harness, model_target, cwd, flow="", reader, writer,
     discarded, a short deterministic notice is written, and the prompt remains
     READY.  A SIGINT while RUNNING sets the event so the runner can terminate
     only the child process group it owns.
+
+    ``color`` forces ANSI colour on or off; ``None`` decides from the
+    environment and the writer (see :func:`color_enabled`).
     """
     if runner is None:
         runner = execute
+    use_color = color_enabled(writer, color)
+
+    def _paint(kind, text):
+        return paint(kind, text, use_color)
 
     if cancel_event is not None:
         cancel_event.clear()
@@ -263,9 +380,9 @@ def run_terminal(*, role, harness, model_target, cwd, flow="", reader, writer,
     def on_event(kind, payload):
         with write_lock:
             if kind == RUNNING:
-                writer.write(f"\n[{RUNNING}] {harness_label} / {model_label}\n")
-                writer.write(f"pid: {payload.get('pid')}\n")
-                writer.write(f"elapsed: {_fmt_elapsed(payload.get('elapsed', 0.0))}\n")
+                writer.write(_paint(
+                    "running",
+                    f"[{RUNNING}] {harness_label} / {model_label} · pid {payload.get('pid')}") + "\n")
             elif kind == "HEARTBEAT":
                 # One line. The phase and activity come from the runner's live
                 # read of the harness's event stream (invoke.ProgressTracker), so
@@ -282,12 +399,14 @@ def run_terminal(*, role, harness, model_target, cwd, flow="", reader, writer,
                                  f"{payload.get('tool_errors', 0)} err")
                 else:
                     parts.append("alive" if payload.get("process_alive", True) else "not alive")
-                writer.write(" · ".join(parts) + "\n")
+                writer.write(_paint("heartbeat", " · ".join(parts)) + "\n")
             elif kind == "OUTPUT":
                 # One rendered pane line (invoke.LiveRenderer), the moment
                 # it is complete: prose as it streams, a tool result as it
-                # lands, a status change as it happens.
-                writer.write(str(payload.get("text", "")) + "\n")
+                # lands, a status change as it happens. The text is plain;
+                # the kind says how to paint it.
+                writer.write(_paint(str(payload.get("kind", "prose")),
+                                    str(payload.get("text", ""))) + "\n")
                 live_lines["count"] += 1
             writer.flush()
 
@@ -313,23 +432,18 @@ def run_terminal(*, role, harness, model_target, cwd, flow="", reader, writer,
             ident = compute_identity(frame.request_id, task)
             key = (ident.request_id, ident.sha256)
             if key in completed and not frame.retry:
-                writer.write("\n[DUPLICATE_REQUEST]\n")
-                writer.write(f"request_id: {ident.request_id}\n")
-                writer.write(f"sha256: {ident.sha256}\n")
+                writer.write("\n" + _paint(
+                    "duplicate",
+                    f"[{DUPLICATE_REQUEST}] {ident.request_id} · sha256 {ident.sha256[:8]}") + "\n")
                 writer.write(_ready_line(role))
                 writer.flush()
                 continue
 
-            writer.write("\n[DISPATCH]\n")
-            writer.write(f"request_id: {ident.request_id}\n")
-            writer.write(f"chars: {ident.chars}\n")
-            writer.write(f"lines: {ident.lines}\n")
-            writer.write(f"sha256: {ident.sha256}\n")
-            writer.write(f"harness: {harness_label}\n")
-            writer.write(f"role: {role}\n")
-            writer.write(f"model_target: {model_label}\n")
+            dispatch = (f"[DISPATCH] {ident.request_id} · {ident.chars} chars / "
+                        f"{ident.lines} lines · sha256 {ident.sha256[:8]}")
             if frame.retry:
-                writer.write("retry: true\n")
+                dispatch += " · retry: true"
+            writer.write("\n" + _paint("dispatch", dispatch) + "\n")
             writer.flush()
 
             runner_kwargs = {
@@ -369,22 +483,19 @@ def run_terminal(*, role, harness, model_target, cwd, flow="", reader, writer,
                 cancel_event.clear()
             completed.add(key)
             status = result["status"]
-            writer.write(f"\n[{status}]\n")
-            writer.write(f"request_id: {frame.request_id}\n")
-            writer.write(f"duration: {_fmt_elapsed(result.get('elapsed', 0.0))}\n")
             out = (result.get("output") or "").strip()
             err = (result.get("error") or "").strip()
-            if out and live_lines["count"]:
-                # The stream was painted while it ran; only the closing
-                # count is owed. A runner whose output was not an event
-                # stream passed through verbatim live and owes nothing.
-                summary = child_output_summary(out)
-                if summary:
-                    writer.write(summary + "\n")
-            elif out:
+            # ONE completion line: status, request id, duration, and the
+            # counts read from the same renderer that painted the pane.
+            stats = child_output_stats(out) if out else None
+            line, kind = render_completion(status, frame.request_id,
+                                           result.get("elapsed", 0.0), stats,
+                                           exit_code=result.get("exit_code"))
+            writer.write("\n" + _paint(kind, line) + "\n")
+            if out and not live_lines["count"]:
                 # No OUTPUT events came — a runner that renders nothing
                 # live (a communicate()-only process, a fake in tests) —
-                # so the finished buffer is rendered here, as before.
+                # so the finished buffer is rendered here, after the line.
                 writer.write(render_child_output(out) + "\n")
             if err:
                 writer.write(f"[stderr] {err}\n")

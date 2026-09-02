@@ -477,8 +477,7 @@ def test_multiline_terminal_submission_is_one_invocation(monkeypatch):
     assert calls[0]["task"].count("\n") == payload.count("\n")
     assert len(calls[0]["task"]) == len(payload)
     # The terminal prints request identity metadata, including chars and lines.
-    assert f"chars: {len(payload)}" in out
-    assert f"lines: {len(payload.splitlines())}" in out
+    assert f"{len(payload)} chars / {len(payload.splitlines())} lines" in out
     assert "[SUCCESS]" in out
     assert "[DISPATCH]" in out
     # Exactly one DISPATCH block (one turn) and exactly one SUCCESS block.
@@ -696,8 +695,8 @@ def test_terminal_repeated_turns_return_to_ready():
 def test_terminal_handled_error_returns_to_ready():
     out, calls = _drive_terminal(["failing task"], _fake_error_runner)
     assert calls[0]["task"] == "failing task"
-    assert "[ERROR]" in out
-    assert "handled failure" in out
+    assert "[FAILED] ha-0 · 0.2s" in out, "an ERROR result is one [FAILED] line"
+    assert "[stderr] handled failure" in out
     assert out.count("Status: READY") == 2  # initial + after handled ERROR
 
 
@@ -775,21 +774,20 @@ def test_terminal_multiline_payload_is_one_invocation():
     # ONE semantic task -> EXACTLY ONE invocation, with the whole payload.
     assert len(calls) == 1
     assert calls[0]["task"] == payload
-    assert "lines: " in out
-    assert f"lines: {len(payload.splitlines())}" in out
+    assert f"{len(payload)} chars / {len(payload.splitlines())} lines" in out
 
 
 def test_terminal_prints_request_identity_metadata():
     payload = "hello\nworld"
     out, _ = _drive_terminal([payload], _fake_success_runner)
     ident = compute_identity("ha-0", payload)
-    assert f"request_id: ha-0" in out
-    assert f"chars: {ident.chars}" in out
-    assert f"lines: {ident.lines}" in out
-    assert f"sha256: {ident.sha256}" in out
-    assert "harness: DeepSeek Harness" in out
-    assert "role: probe" in out
-    assert "model_target: DeepSeek V4 Pro" in out
+    # One line: request id, size, the first 8 hex of the sha256.
+    assert f"[DISPATCH] ha-0 · {ident.chars} chars / {ident.lines} lines · sha256 {ident.sha256[:8]}\n" in out
+    assert "[SUCCESS] ha-0 · 0.5s\n" in out, "a non-event-stream output has no counts"
+    # Harness and model target are on the RUNNING line (from the runner's
+    # event); role is in the banner and the prompt. None repeat per dispatch.
+    assert "harness:" not in out and "role:" not in out and "model_target:" not in out
+    assert "elapsed:" not in out and "duration:" not in out
 
 
 def test_terminal_prints_running_and_heartbeat_from_events():
@@ -806,10 +804,8 @@ def test_terminal_prints_running_and_heartbeat_from_events():
     run_terminal(role="probe", harness="dsh", model_target="deepseek-v4-pro",
                  cwd=".", reader=reader, writer=writer, runner=emitting_runner)
     out = writer.getvalue()
-    assert "[RUNNING]" in out
-    assert "DeepSeek Harness / DeepSeek V4 Pro" in out
-    assert "pid: 7" in out
-    assert "[HEARTBEAT] · ha-0 · 1.50s · alive" in out
+    assert "[RUNNING] DeepSeek Harness / DeepSeek V4 Pro · pid 7\n" in out
+    assert "[HEARTBEAT] · ha-0 · 1s · alive" in out
 
 
 def _jsonl_stream():
@@ -829,11 +825,9 @@ def _jsonl_stream():
 
 
 _LIVE_PANE_LINES = [
-    "[started] session s model=m workspace=/w permission=P",
-    "Reading the handoff.",
-    "[tool] shell exit=0 (46ms)",
-    "[status] COMPLETED",
-    "[completed] exit=0",
+    ("[started] session s · m · /w · P", "started"),
+    ("Reading the handoff.", "prose"),
+    ("[tool] shell ok (46 ms)", "tool"),
 ]
 
 
@@ -843,8 +837,8 @@ def test_terminal_shows_live_output_in_order_and_closes_with_only_the_summary():
     def live_runner(**kwargs):
         on_event = kwargs["on_event"]
         on_event("RUNNING", {"pid": 7, "elapsed": 0.0, "process_alive": True})
-        for text in _LIVE_PANE_LINES:
-            on_event("OUTPUT", {"request_id": "ha-0", "pid": 7, "text": text})
+        for text, kind in _LIVE_PANE_LINES:
+            on_event("OUTPUT", {"request_id": "ha-0", "pid": 7, "text": text, "kind": kind})
         return {"status": SUCCESS, "output": _jsonl_stream(), "error": "",
                 "elapsed": 0.5, "pid": 7, "request_id": "ha-0"}
 
@@ -853,13 +847,14 @@ def test_terminal_shows_live_output_in_order_and_closes_with_only_the_summary():
     run_terminal(role="probe", harness="dsh", model_target="deepseek-v4-pro",
                  cwd=".", reader=reader, writer=writer, runner=live_runner)
     out = writer.getvalue()
-    positions = [out.index(line) for line in _LIVE_PANE_LINES]
+    positions = [out.index(line) for line, _ in _LIVE_PANE_LINES]
     assert positions == sorted(positions), "live lines appear in the order they were emitted"
-    assert positions[-1] < out.index("[SUCCESS]"), "live lines precede the completion block"
-    for line in _LIVE_PANE_LINES:
+    assert positions[-1] < out.index("[SUCCESS]"), "live lines precede the completion line"
+    for line, _ in _LIVE_PANE_LINES:
         assert out.count(line) == 1, f"{line!r} must not be rendered a second time at completion"
     tail = out[out.index("[SUCCESS]"):]
-    assert "[turns] 1 model requests, 1 tool calls, 0 tool errors" in tail
+    assert tail.startswith("[SUCCESS] ha-0 · 0.5s · 1 req / 1 calls / 0 err\n"), \
+        "the completion is one line carrying the counts"
     assert tail.count("Status: READY") == 1
 
 
@@ -877,9 +872,9 @@ def test_terminal_renders_the_whole_output_when_nothing_came_live():
                  cwd=".", reader=reader, writer=writer, runner=silent_runner)
     out = writer.getvalue()
     tail = out[out.index("[SUCCESS]"):]
-    for line in _LIVE_PANE_LINES:
-        assert out.count(line) == 1 and line in tail, f"{line!r} is rendered once, after completion"
-    assert "[turns] 1 model requests, 1 tool calls, 0 tool errors" in tail
+    assert tail.startswith("[SUCCESS] ha-0 · 0.5s · 1 req / 1 calls / 0 err\n")
+    for line, _ in _LIVE_PANE_LINES:
+        assert out.count(line) == 1 and line in tail, f"{line!r} is rendered once, after the completion line"
 
 
 # ── terminal surface ────────────────────────────────────────────────

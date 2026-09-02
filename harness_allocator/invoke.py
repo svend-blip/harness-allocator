@@ -22,15 +22,18 @@ preserved verbatim and produce exactly one harness invocation.
 Progress (RUNNING / periodic HEARTBEAT) is surfaced through an optional
 ``on_event`` callback without exposing private reasoning. While the harness
 runs, its JSONL event stream is rendered live through the same callback as
-``OUTPUT`` fragments (one pane line each — prose as it streams, one line per
-tool result, status changes as they happen); the heartbeat then only speaks
-when the pane has been silent for a whole interval. The final SUCCESS or
-ERROR is reported by the terminal from the returned result, not by ``on_event``.
+``OUTPUT`` fragments (one pane line each, plain text plus a ``kind`` — prose
+as it streams, runs of identical tool results coalesced into one ``×N``
+line, informative status changes as they happen); the heartbeat then only
+speaks when the pane has been silent for a whole interval, releasing a held
+tool group first. The final SUCCESS or ERROR is reported by the terminal from
+the returned result, not by ``on_event``.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import signal
 import subprocess
@@ -119,7 +122,8 @@ def execute(role="", harness=None, model_target="", cwd=None, task="", cfg=None,
     :data:`DEFAULT_HEARTBEAT_INTERVAL`). ``on_event``, when given, is called as
     ``on_event(kind, payload)`` with ``kind`` in ``{RUNNING, "HEARTBEAT",
     "OUTPUT"}``; an ``OUTPUT`` payload carries one rendered pane line in
-    ``text`` (no trailing newline).
+    ``text`` (plain, no trailing newline) and its ``kind`` (one of
+    :data:`FRAGMENT_KINDS`) so the terminal can colour it.
     ``cancel_event`` and ``cancel_callback`` are optional cooperative hooks
     used by the persistent terminal to stop this invocation on Ctrl+C.
     ``cfg`` is injectable for tests.
@@ -283,8 +287,7 @@ class ProgressTracker:
             elif kind == "assistant_stream":
                 self.stream_chars += len(str(obj.get("delta", "")))
                 self.phase = "STREAMING"
-                self.activity = (f"streaming reply #{self.requests} "
-                                 f"({self.stream_chars} chars)")
+                self.activity = f"reply #{self.requests} ({self.stream_chars} chars)"
             elif kind == "tool_call":
                 self.calls += 1
                 tool = obj.get("tool") or "?"
@@ -332,6 +335,68 @@ class ProgressTracker:
 _THINK_OPEN = "<think>"
 _THINK_CLOSE = "</think>"
 
+#: Statuses the completion line already conveys; never shown as ``[status] …``.
+_TERMINAL_STATUSES = ("COMPLETED", "FAILED", "INTERRUPTED")
+
+#: Longest tool-error message shown on a pane line.
+_TOOL_MESSAGE_MAX = 100
+
+#: Kinds a pane fragment can carry; the terminal colours by kind, never by text.
+FRAGMENT_KINDS = ("prose", "tool", "tool_error", "thinking", "status", "started", "passthrough")
+
+
+class Fragment(tuple):
+    """One pane line: ``(text, kind)``. Compares equal to a plain tuple."""
+
+    __slots__ = ()
+
+    def __new__(cls, text, kind="prose"):
+        return tuple.__new__(cls, (text, kind))
+
+    @property
+    def text(self):
+        return self[0]
+
+    @property
+    def kind(self):
+        return self[1]
+
+
+_GO_DURATION = re.compile(r"(\d+(?:\.\d+)?)(ns|us|µs|μs|ms|s|m|h)")
+_GO_UNIT_SECONDS = {"ns": 1e-9, "us": 1e-6, "µs": 1e-6, "μs": 1e-6, "ms": 1e-3,
+                    "s": 1.0, "m": 60.0, "h": 3600.0}
+
+
+def parse_duration(value):
+    """Seconds for a Go ``time.Duration.String()`` value, or ``None``.
+
+    ``"2.021236ms"`` -> 0.002021236, ``"1m2.5s"`` -> 62.5. A number is taken
+    as seconds. Anything else is ``None`` — the caller shows it verbatim.
+    """
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    text = str(value or "").strip()
+    if not text:
+        return None
+    pos = 0
+    total = 0.0
+    for match in _GO_DURATION.finditer(text):
+        if match.start() != pos:
+            return None
+        total += float(match.group(1)) * _GO_UNIT_SECONDS[match.group(2)]
+        pos = match.end()
+    return total if pos == len(text) and pos > 0 else None
+
+
+def format_duration(seconds):
+    """``< 1 ms`` / ``2 ms`` / ``1.2 s`` — whole milliseconds, one decimal above a second."""
+    ms = int(round(float(seconds) * 1000.0))
+    if ms < 1:
+        return "< 1 ms"
+    if ms < 1000:
+        return f"{ms} ms"
+    return f"{ms / 1000.0:.1f} s"
+
 
 def _held_tag_prefix(text, tag):
     """Length of the longest suffix of ``text`` that is a proper prefix of ``tag``.
@@ -346,83 +411,137 @@ def _held_tag_prefix(text, tag):
     return 0
 
 
-def render_tool_result(event, names):
-    """One line for a ``tool_result`` event: ``[tool] shell exit=0 (46ms)``,
-    ``[tool] read_file ERROR path_escape: …``."""
+def classify_tool_result(event, names):
+    """What a ``tool_result`` event says, as a dict the renderer can coalesce.
+
+    ``name`` is the tool; ``outcome`` is the text after the name that decides
+    whether two consecutive results are the same thing (``ok``, ``exit=1``,
+    ``ERROR path_escape``); ``detail`` is the message shown once after the
+    outcome (``: start_line is not an int``); ``seconds`` is the parsed
+    duration or ``None``; ``raw_duration`` is kept for an unparseable value;
+    ``error`` says whether it counts as a tool error.
+    """
     call_id = event.get("call_id")
     name = event.get("tool") or names.pop(call_id, None) or "?"
     content = event.get("content") or ""
     status = event.get("tool_result_status") or ""
-    detail = ""
     try:
         parsed = json.loads(content) if isinstance(content, str) else content
     except ValueError:
         parsed = None
-    if isinstance(parsed, dict):
-        if "kind" in parsed:
-            detail = f"{parsed.get('kind')}: {str(parsed.get('message', ''))[:160]}"
-            status = status or "error"
-        elif "exit_code" in parsed:
-            detail = f"exit={parsed.get('exit_code')}"
-            dur = parsed.get("duration")
-            if dur:
-                detail += f" ({dur})"
-    line = f"[tool] {name}"
-    if status and status != "ok":
-        line += f" {status.upper()}"
-    if detail:
-        line += f" {detail}"
+    outcome = "ok"
+    detail = ""
+    seconds = None
+    raw_duration = ""
+    error = bool(status) and status != "ok"
+    if isinstance(parsed, dict) and "kind" in parsed:
+        error = True
+        kind = str(parsed.get("kind"))
+        message = " ".join(str(parsed.get("message", "")).split())
+        outcome = f"ERROR {kind}"
+        if kind == "path_escape":
+            detail = " (absolute path rejected at the permission gate)"
+        elif message:
+            if len(message) > _TOOL_MESSAGE_MAX:
+                message = message[:_TOOL_MESSAGE_MAX - 1] + "…"
+            detail = f": {message}"
+    elif error:
+        outcome = status.upper()
+    elif isinstance(parsed, dict) and "exit_code" in parsed:
+        code = parsed.get("exit_code")
+        outcome = "ok" if code == 0 else f"exit={code}"
+    if isinstance(parsed, dict) and parsed.get("duration"):
+        seconds = parse_duration(parsed.get("duration"))
+        if seconds is None:
+            raw_duration = str(parsed.get("duration"))
+    return {"name": name, "outcome": outcome, "detail": detail,
+            "seconds": seconds, "raw_duration": raw_duration, "error": error}
+
+
+def render_tool_group(group):
+    """The line for one or more coalesced tool results.
+
+    ``[tool] shell ok (47 ms)`` for a single call; ``[tool] shell ×5 ok
+    (max 2 ms)`` for a run of calls with the same tool and outcome;
+    ``[tool] read_file ERROR path_escape (absolute path rejected at the
+    permission gate)`` for an error, with ``×N`` after the name when repeated.
+    """
+    count = group["count"]
+    line = f"[tool] {group['name']}"
+    if count > 1:
+        line += f" ×{count}"
+    line += f" {group['outcome']}{group['detail']}"
+    if group["max_seconds"] is not None:
+        shown = format_duration(group["max_seconds"])
+        line += f" (max {shown})" if count > 1 else f" ({shown})"
+    elif group["raw_duration"]:
+        line += f" ({group['raw_duration']})"
     return line
 
 
+def render_tool_result(event, names):
+    """One line for a single ``tool_result`` event (no coalescing)."""
+    info = classify_tool_result(event, names)
+    return render_tool_group({**info, "count": 1, "max_seconds": info["seconds"]})
+
+
 def render_event(event, names):
-    """The pane line for a non-prose event, or ``None`` when it shows nothing.
+    """The pane fragment for a non-prose, non-tool event, or ``None``.
 
     ``names`` maps call_id to tool name so a result whose event lacks the
     name can still be labelled; ``tool_call`` events register into it and
-    render nothing. Prose (``assistant_stream``) is buffered by
-    :class:`LiveRenderer`, and ``model_request`` is only counted, so both
-    return ``None`` here. ``status: STREAMING`` is noise, not a change.
+    render nothing. Prose (``assistant_stream``) is buffered and tool
+    results are coalesced by :class:`LiveRenderer`; ``model_request`` is
+    only counted; ``completed`` is carried by the terminal's completion
+    line. ``status: STREAMING`` is noise, and the terminal statuses
+    (COMPLETED / FAILED / INTERRUPTED) are what the completion line says.
     """
     kind = event.get("event")
-    if kind in ("assistant_stream", "model_request"):
+    if kind in ("assistant_stream", "model_request", "tool_result", "completed"):
         return None
     if kind == "tool_call":
         names[event.get("call_id")] = event.get("tool") or "?"
         return None
     if kind == "started":
         cfg = event.get("config") or {}
-        return (f"[started] session {str(event.get('session_id', ''))[:8]} "
-                f"model={cfg.get('model', '')} workspace={cfg.get('workspace', '')} "
-                f"permission={cfg.get('permission', '')}")
-    if kind == "tool_result":
-        return render_tool_result(event, names)
+        return Fragment(
+            f"[started] session {str(event.get('session_id', ''))[:8]} · "
+            f"{cfg.get('model', '')} · {cfg.get('workspace', '')} · {cfg.get('permission', '')}",
+            "started")
     if kind == "status":
         status = str(event.get("status", ""))
-        return None if status == "STREAMING" else f"[status] {status}"
-    if kind == "completed":
-        return f"[completed] exit={event.get('exit_code', 0)}"
+        if status == "STREAMING" or status in _TERMINAL_STATUSES:
+            return None
+        return Fragment(f"[status] {status}", "status")
     if kind == "interrupted":
-        return "[interrupted]"
-    return f"[{kind}]"
+        return Fragment("[interrupted]", "status")
+    return Fragment(f"[{kind}]", "status")
 
 
 class LiveRenderer:
     """Render a harness's JSONL event stream as pane text, as it arrives.
 
-    ``feed(line)`` returns the fragments to print NOW — each one pane line,
-    no trailing newline. Assistant deltas are buffered and released only as
-    complete lines, so the pane reads like a reply being typed rather than
-    a stutter of tokens. A ``<think>…</think>`` block is never shown: its
-    text is suppressed while the block is open and replaced by
+    ``feed(line)`` returns the fragments to print NOW — each one pane line
+    as a :class:`Fragment` ``(text, kind)``, no trailing newline, no colour.
+    Assistant deltas are buffered and released only as complete lines, so
+    the pane reads like a reply being typed rather than a stutter of
+    tokens. A ``<think>…</think>`` block is never shown: its text is
+    suppressed while the block is open and replaced by a line
     ``[thinking: N chars]`` when it closes, or by
     ``[thinking, UNTERMINATED: N chars]`` if the prose ends inside it —
     that is the shape of a turn cut at the output ceiling (measured
     2026-09-01 on 9000-implementer: 33,630 characters, no closing tag,
     exit 0), and it must be visible as a defect rather than scroll past as
-    prose. Any other event first flushes the prose, then renders as one
-    line. A non-JSON line passes through verbatim. Counts of model
-    requests, tool calls and tool errors feed :meth:`summary`.
+    prose.
+
+    Consecutive tool results with the same tool and the same outcome are
+    held and shown as ONE line (``[tool] shell ×5 ok (max 2 ms)``); the
+    group is released by the next visible fragment of another kind, by
+    :meth:`flush_tools` (the heartbeat calls it, so a long run of quiet
+    tool calls still shows progress) or by :meth:`flush`. A non-JSON line
+    passes through verbatim. Counts of model requests, tool calls and tool
+    errors, the child's exit code and its last informative status feed the
+    terminal's completion line.
     """
 
     def __init__(self):
@@ -433,9 +552,12 @@ class LiveRenderer:
         self._think_chars = 0
         self._block_started = False   # a visible line has gone out since the last flush
         self._pending_blanks = 0      # blank lines held until a non-blank one follows
+        self._tools = None            # the pending coalesced tool group
         self.requests = 0
         self.calls = 0
         self.errors = 0
+        self.exit_code = None
+        self.last_status = None       # last status that was neither STREAMING nor terminal
 
     def feed(self, line):
         """Absorb one raw stdout line; return the fragments to print now."""
@@ -449,28 +571,45 @@ class LiveRenderer:
             except ValueError:
                 obj = None
         if not isinstance(obj, dict) or "event" not in obj:
-            return [line.rstrip("\r\n")]
+            return self.flush_tools() + [Fragment(line.rstrip("\r\n"), "passthrough")]
         return self.feed_event(obj)
 
     def feed_event(self, event):
         """Absorb one parsed event; return the fragments to print now."""
         kind = event.get("event")
         if kind == "assistant_stream":
-            return self._absorb(str(event.get("delta", "")))
+            out = self._absorb(str(event.get("delta", "")))
+            return self.flush_tools() + out if out else out
         if kind == "model_request":
             self.requests += 1
             return []
         if kind == "tool_call":
             self.calls += 1
+            self._names[event.get("call_id")] = event.get("tool") or "?"
+            return []
+        if kind == "tool_result":
+            return self._absorb_tool(classify_tool_result(event, self._names))
+        if kind == "completed":
+            self.exit_code = event.get("exit_code", 0)
+            return self.flush()
+        if kind == "status":
+            status = str(event.get("status", ""))
+            if status == "STREAMING":
+                return []   # noise between calls; must not break a tool group
+            if status not in _TERMINAL_STATUSES:
+                self.last_status = status
         out = self.flush()
-        line = render_event(event, self._names)
-        if line is not None:
-            if kind == "tool_result" and ("ERROR" in line or "FAILED" in line):
-                self.errors += 1
-            out.append(line)
+        fragment = render_event(event, self._names)
+        if fragment is not None:
+            out.append(fragment)
         return out
 
     def flush(self):
+        """Release everything held: the tool group first (it came first), then the prose."""
+        prose = self._flush_prose()
+        return self.flush_tools() + prose
+
+    def _flush_prose(self):
         """End the prose block: release the held tail and the unterminated line."""
         if self._raw:
             if self._in_think:
@@ -479,6 +618,10 @@ class LiveRenderer:
                 self._line += self._raw
             self._raw = ""
         if self._in_think:
+            if self._line.strip():
+                self._line += "\n"
+            else:
+                self._line = ""
             self._line += f"[thinking, UNTERMINATED: {self._think_chars} chars]"
             self._in_think = False
             self._think_chars = 0
@@ -490,9 +633,47 @@ class LiveRenderer:
         self._pending_blanks = 0
         return out
 
+    def flush_tools(self):
+        """Release the pending tool group as its one line, if there is one."""
+        if self._tools is None:
+            return []
+        group, self._tools = self._tools, None
+        return [Fragment(render_tool_group(group), "tool_error" if group["error"] else "tool")]
+
+    def counts(self):
+        return {"model_requests": self.requests, "tool_calls": self.calls,
+                "tool_errors": self.errors}
+
+    def tail(self):
+        """``11 req / 17 calls / 3 err`` — the counts as the completion line shows them."""
+        return f"{self.requests} req / {self.calls} calls / {self.errors} err"
+
     def summary(self):
         return (f"[turns] {self.requests} model requests, {self.calls} tool calls, "
                 f"{self.errors} tool errors")
+
+    # ── tool coalescing ──
+
+    def _absorb_tool(self, info):
+        if info["error"]:
+            self.errors += 1
+        key = (info["name"], info["outcome"])
+        # A tool result ends the model's turn: an unterminated prose line is
+        # released now, after any group it followed.
+        prose = self._flush_prose()
+        out = self.flush_tools() + prose if prose else []
+        if self._tools is not None and self._tools["key"] == key:
+            group = self._tools
+            group["count"] += 1
+            if info["seconds"] is not None:
+                group["max_seconds"] = (info["seconds"] if group["max_seconds"] is None
+                                        else max(group["max_seconds"], info["seconds"]))
+            elif info["raw_duration"] and not group["raw_duration"]:
+                group["raw_duration"] = info["raw_duration"]
+            return out
+        out += self.flush_tools()
+        self._tools = {**info, "key": key, "count": 1, "max_seconds": info["seconds"]}
+        return out
 
     # ── prose buffering ──
 
@@ -507,7 +688,13 @@ class LiveRenderer:
                     self._raw = self._raw[len(self._raw) - keep:]
                     break
                 self._think_chars += idx
-                self._line += f"[thinking: {self._think_chars} chars]"
+                # The marker takes a line of its own; text already on the
+                # current line is closed first, whitespace alone is dropped.
+                if self._line.strip():
+                    self._line += "\n"
+                else:
+                    self._line = ""
+                self._line += f"[thinking: {self._think_chars} chars]\n"
                 self._in_think = False
                 self._raw = self._raw[idx + len(_THINK_CLOSE):]
             else:
@@ -541,10 +728,15 @@ class LiveRenderer:
         elif not text:
             self._pending_blanks += 1
             return
-        out.extend([""] * self._pending_blanks)
+        out.extend([Fragment("", "prose")] * self._pending_blanks)
         self._pending_blanks = 0
+        if text.startswith("[thinking") and text.endswith(" chars]"):
+            # The marker stands alone; the blank lines a model emits right
+            # after </think> are leading blanks of the prose that follows.
+            out.append(Fragment(text, "thinking"))
+            return
         self._block_started = True
-        out.append(text)
+        out.append(Fragment(text, "prose"))
 
 
 def run_argv(argv, *, cwd, timeout=None, heartbeat_interval=15.0,
@@ -563,10 +755,13 @@ def run_argv(argv, *, cwd, timeout=None, heartbeat_interval=15.0,
     Output pipes are drained on a background thread so a large payload/output
     can never deadlock the heartbeat loop. Each drained stdout line is also
     rendered by :class:`LiveRenderer` and every finished fragment goes out
-    at once as ``on_event("OUTPUT", {..., "text": fragment})`` — from the
-    drainer thread, so the callback must tolerate that. A heartbeat is then
-    emitted only after a full interval in which nothing was printed: its job
-    is to show life during silence, not to interleave with a reply.
+    at once as ``on_event("OUTPUT", {..., "text": plain, "kind": kind})`` —
+    from the drainer thread, so the callback must tolerate that. A heartbeat
+    is then emitted only after a full interval in which nothing was printed:
+    its job is to show life during silence, not to interleave with a reply.
+    Before it fires it releases a tool group the renderer is still holding,
+    so a long run of identical tool calls shows as ``×N`` progress instead
+    of nothing. The result carries the child's ``exit_code``.
     """
     ctx = dict(event_context or {})
     argv = list(argv)
@@ -619,13 +814,15 @@ def run_argv(argv, *, cwd, timeout=None, heartbeat_interval=15.0,
     # emission after the callback raised once — the run's output must never
     # be lost to a display problem, so the drainer keeps draining.
     live = {"last_output_at": start, "failed": ""}
+    # The renderer is fed by the drainer and flushed by the heartbeat loop.
+    render_lock = threading.Lock()
 
     def _emit_live(fragments):
         if not fragments or live["failed"]:
             return
         try:
-            for text in fragments:
-                on_event("OUTPUT", {**ctx, "pid": pid, "text": text})
+            for text, kind in fragments:
+                on_event("OUTPUT", {**ctx, "pid": pid, "text": text, "kind": kind})
         except Exception as exc:  # noqa: BLE001 — reported in the result, never raised here
             live["failed"] = f"live render failed: {exc!r}"
             return
@@ -660,11 +857,13 @@ def run_argv(argv, *, cwd, timeout=None, heartbeat_interval=15.0,
                 lines.append(line)
                 progress.feed(line)
                 if renderer is not None:
-                    _emit_live(renderer.feed(line))
+                    with render_lock:
+                        _emit_live(renderer.feed(line))
         except (OSError, ValueError):
             pass
         if renderer is not None:
-            _emit_live(renderer.flush())
+            with render_lock:
+                _emit_live(renderer.flush())
         err_thread.join()
         try:
             proc.wait()
@@ -712,6 +911,9 @@ def run_argv(argv, *, cwd, timeout=None, heartbeat_interval=15.0,
         # heartbeat or the last live fragment — so a streaming reply is
         # never interrupted by one, and a quiet stretch still gets one.
         if now - max(last_hb, live["last_output_at"]) >= heartbeat_interval:
+            if renderer is not None:
+                with render_lock:
+                    _emit_live(renderer.flush_tools())
             if on_event:
                 on_event(
                     "HEARTBEAT",
@@ -756,6 +958,7 @@ def run_argv(argv, *, cwd, timeout=None, heartbeat_interval=15.0,
         "error": err,
         "elapsed": elapsed,
         "pid": pid,
+        "exit_code": rc,
         "cancelled": cancel_seen,
         "process_group": pid if os.name == "posix" else None,
     }
