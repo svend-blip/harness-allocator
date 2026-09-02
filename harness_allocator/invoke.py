@@ -20,7 +20,11 @@ interpolation and no shlex round-trip, so embedded newlines in the prompt are
 preserved verbatim and produce exactly one harness invocation.
 
 Progress (RUNNING / periodic HEARTBEAT) is surfaced through an optional
-``on_event`` callback without exposing private reasoning. The final SUCCESS or
+``on_event`` callback without exposing private reasoning. While the harness
+runs, its JSONL event stream is rendered live through the same callback as
+``OUTPUT`` fragments (one pane line each — prose as it streams, one line per
+tool result, status changes as they happen); the heartbeat then only speaks
+when the pane has been silent for a whole interval. The final SUCCESS or
 ERROR is reported by the terminal from the returned result, not by ``on_event``.
 """
 
@@ -113,7 +117,9 @@ def execute(role="", harness=None, model_target="", cwd=None, task="", cfg=None,
     caller's). ``timeout`` is an optional per-invocation cap in seconds.
     ``heartbeat_interval`` controls heartbeat cadence (default
     :data:`DEFAULT_HEARTBEAT_INTERVAL`). ``on_event``, when given, is called as
-    ``on_event(kind, payload)`` with ``kind`` in ``{RUNNING, "HEARTBEAT"}``.
+    ``on_event(kind, payload)`` with ``kind`` in ``{RUNNING, "HEARTBEAT",
+    "OUTPUT"}``; an ``OUTPUT`` payload carries one rendered pane line in
+    ``text`` (no trailing newline).
     ``cancel_event`` and ``cancel_callback`` are optional cooperative hooks
     used by the persistent terminal to stop this invocation on Ctrl+C.
     ``cfg`` is injectable for tests.
@@ -315,6 +321,231 @@ class ProgressTracker:
             }
 
 
+# ── rendering the event stream as pane text ─────────────────────────
+#
+# ONE renderer serves two readers: run_argv drives it line by line while the
+# harness runs (fragments go out as OUTPUT events the moment they are
+# complete), and terminal.render_child_output drives it over a finished
+# buffer. Both produce the same lines, so the pane can never show one thing
+# live and another after the fact.
+
+_THINK_OPEN = "<think>"
+_THINK_CLOSE = "</think>"
+
+
+def _held_tag_prefix(text, tag):
+    """Length of the longest suffix of ``text`` that is a proper prefix of ``tag``.
+
+    A tag can be split across two stream deltas (``"<thi"`` + ``"nk>"``);
+    the suffix that might be the start of one is held back until the next
+    delta decides what it was.
+    """
+    for n in range(min(len(tag) - 1, len(text)), 0, -1):
+        if text.endswith(tag[:n]):
+            return n
+    return 0
+
+
+def render_tool_result(event, names):
+    """One line for a ``tool_result`` event: ``[tool] shell exit=0 (46ms)``,
+    ``[tool] read_file ERROR path_escape: …``."""
+    call_id = event.get("call_id")
+    name = event.get("tool") or names.pop(call_id, None) or "?"
+    content = event.get("content") or ""
+    status = event.get("tool_result_status") or ""
+    detail = ""
+    try:
+        parsed = json.loads(content) if isinstance(content, str) else content
+    except ValueError:
+        parsed = None
+    if isinstance(parsed, dict):
+        if "kind" in parsed:
+            detail = f"{parsed.get('kind')}: {str(parsed.get('message', ''))[:160]}"
+            status = status or "error"
+        elif "exit_code" in parsed:
+            detail = f"exit={parsed.get('exit_code')}"
+            dur = parsed.get("duration")
+            if dur:
+                detail += f" ({dur})"
+    line = f"[tool] {name}"
+    if status and status != "ok":
+        line += f" {status.upper()}"
+    if detail:
+        line += f" {detail}"
+    return line
+
+
+def render_event(event, names):
+    """The pane line for a non-prose event, or ``None`` when it shows nothing.
+
+    ``names`` maps call_id to tool name so a result whose event lacks the
+    name can still be labelled; ``tool_call`` events register into it and
+    render nothing. Prose (``assistant_stream``) is buffered by
+    :class:`LiveRenderer`, and ``model_request`` is only counted, so both
+    return ``None`` here. ``status: STREAMING`` is noise, not a change.
+    """
+    kind = event.get("event")
+    if kind in ("assistant_stream", "model_request"):
+        return None
+    if kind == "tool_call":
+        names[event.get("call_id")] = event.get("tool") or "?"
+        return None
+    if kind == "started":
+        cfg = event.get("config") or {}
+        return (f"[started] session {str(event.get('session_id', ''))[:8]} "
+                f"model={cfg.get('model', '')} workspace={cfg.get('workspace', '')} "
+                f"permission={cfg.get('permission', '')}")
+    if kind == "tool_result":
+        return render_tool_result(event, names)
+    if kind == "status":
+        status = str(event.get("status", ""))
+        return None if status == "STREAMING" else f"[status] {status}"
+    if kind == "completed":
+        return f"[completed] exit={event.get('exit_code', 0)}"
+    if kind == "interrupted":
+        return "[interrupted]"
+    return f"[{kind}]"
+
+
+class LiveRenderer:
+    """Render a harness's JSONL event stream as pane text, as it arrives.
+
+    ``feed(line)`` returns the fragments to print NOW — each one pane line,
+    no trailing newline. Assistant deltas are buffered and released only as
+    complete lines, so the pane reads like a reply being typed rather than
+    a stutter of tokens. A ``<think>…</think>`` block is never shown: its
+    text is suppressed while the block is open and replaced by
+    ``[thinking: N chars]`` when it closes, or by
+    ``[thinking, UNTERMINATED: N chars]`` if the prose ends inside it —
+    that is the shape of a turn cut at the output ceiling (measured
+    2026-09-01 on 9000-implementer: 33,630 characters, no closing tag,
+    exit 0), and it must be visible as a defect rather than scroll past as
+    prose. Any other event first flushes the prose, then renders as one
+    line. A non-JSON line passes through verbatim. Counts of model
+    requests, tool calls and tool errors feed :meth:`summary`.
+    """
+
+    def __init__(self):
+        self._names = {}
+        self._raw = ""            # delta text not yet classified (may end in a partial tag)
+        self._line = ""           # visible text of the current, unterminated line
+        self._in_think = False
+        self._think_chars = 0
+        self._block_started = False   # a visible line has gone out since the last flush
+        self._pending_blanks = 0      # blank lines held until a non-blank one follows
+        self.requests = 0
+        self.calls = 0
+        self.errors = 0
+
+    def feed(self, line):
+        """Absorb one raw stdout line; return the fragments to print now."""
+        stripped = line.strip()
+        if not stripped:
+            return []
+        obj = None
+        if stripped.startswith("{"):
+            try:
+                obj = json.loads(stripped)
+            except ValueError:
+                obj = None
+        if not isinstance(obj, dict) or "event" not in obj:
+            return [line.rstrip("\r\n")]
+        return self.feed_event(obj)
+
+    def feed_event(self, event):
+        """Absorb one parsed event; return the fragments to print now."""
+        kind = event.get("event")
+        if kind == "assistant_stream":
+            return self._absorb(str(event.get("delta", "")))
+        if kind == "model_request":
+            self.requests += 1
+            return []
+        if kind == "tool_call":
+            self.calls += 1
+        out = self.flush()
+        line = render_event(event, self._names)
+        if line is not None:
+            if kind == "tool_result" and ("ERROR" in line or "FAILED" in line):
+                self.errors += 1
+            out.append(line)
+        return out
+
+    def flush(self):
+        """End the prose block: release the held tail and the unterminated line."""
+        if self._raw:
+            if self._in_think:
+                self._think_chars += len(self._raw)
+            else:
+                self._line += self._raw
+            self._raw = ""
+        if self._in_think:
+            self._line += f"[thinking, UNTERMINATED: {self._think_chars} chars]"
+            self._in_think = False
+            self._think_chars = 0
+        out = self._release_lines()
+        if self._line.strip():
+            self._emit(self._line, out)
+        self._line = ""
+        self._block_started = False
+        self._pending_blanks = 0
+        return out
+
+    def summary(self):
+        return (f"[turns] {self.requests} model requests, {self.calls} tool calls, "
+                f"{self.errors} tool errors")
+
+    # ── prose buffering ──
+
+    def _absorb(self, delta):
+        self._raw += delta
+        while self._raw:
+            if self._in_think:
+                idx = self._raw.find(_THINK_CLOSE)
+                if idx == -1:
+                    keep = _held_tag_prefix(self._raw, _THINK_CLOSE)
+                    self._think_chars += len(self._raw) - keep
+                    self._raw = self._raw[len(self._raw) - keep:]
+                    break
+                self._think_chars += idx
+                self._line += f"[thinking: {self._think_chars} chars]"
+                self._in_think = False
+                self._raw = self._raw[idx + len(_THINK_CLOSE):]
+            else:
+                idx = self._raw.find(_THINK_OPEN)
+                if idx == -1:
+                    keep = _held_tag_prefix(self._raw, _THINK_OPEN)
+                    self._line += self._raw[:len(self._raw) - keep]
+                    self._raw = self._raw[len(self._raw) - keep:]
+                    break
+                self._line += self._raw[:idx]
+                self._in_think = True
+                self._think_chars = 0
+                self._raw = self._raw[idx + len(_THINK_OPEN):]
+        return self._release_lines()
+
+    def _release_lines(self):
+        out = []
+        while "\n" in self._line:
+            head, self._line = self._line.split("\n", 1)
+            self._emit(head, out)
+        return out
+
+    def _emit(self, text, out):
+        # A block is shown the way a finished one was: no leading blank
+        # lines or indent, no trailing blank lines, interior blanks kept.
+        text = text.rstrip()
+        if not self._block_started:
+            text = text.lstrip()
+            if not text:
+                return
+        elif not text:
+            self._pending_blanks += 1
+            return
+        out.extend([""] * self._pending_blanks)
+        self._pending_blanks = 0
+        self._block_started = True
+        out.append(text)
+
 
 def run_argv(argv, *, cwd, timeout=None, heartbeat_interval=15.0,
              on_event=None, event_context=None, cancel_event=None,
@@ -330,7 +561,12 @@ def run_argv(argv, *, cwd, timeout=None, heartbeat_interval=15.0,
     Emits ``RUNNING`` (with pid) at start and ``HEARTBEAT`` (with elapsed and
     process-alive) while the subprocess stays alive, through ``on_event``.
     Output pipes are drained on a background thread so a large payload/output
-    can never deadlock the heartbeat loop.
+    can never deadlock the heartbeat loop. Each drained stdout line is also
+    rendered by :class:`LiveRenderer` and every finished fragment goes out
+    at once as ``on_event("OUTPUT", {..., "text": fragment})`` — from the
+    drainer thread, so the callback must tolerate that. A heartbeat is then
+    emitted only after a full interval in which nothing was printed: its job
+    is to show life during silence, not to interleave with a reply.
     """
     ctx = dict(event_context or {})
     argv = list(argv)
@@ -377,6 +613,23 @@ def run_argv(argv, *, cwd, timeout=None, heartbeat_interval=15.0,
 
     captured = {}
     progress = ProgressTracker()
+    renderer = LiveRenderer() if on_event else None
+    # last_output_at is read by the heartbeat loop and written by the drainer;
+    # a single float assignment, so no lock is needed. "failed" stops live
+    # emission after the callback raised once — the run's output must never
+    # be lost to a display problem, so the drainer keeps draining.
+    live = {"last_output_at": start, "failed": ""}
+
+    def _emit_live(fragments):
+        if not fragments or live["failed"]:
+            return
+        try:
+            for text in fragments:
+                on_event("OUTPUT", {**ctx, "pid": pid, "text": text})
+        except Exception as exc:  # noqa: BLE001 — reported in the result, never raised here
+            live["failed"] = f"live render failed: {exc!r}"
+            return
+        live["last_output_at"] = _time.monotonic()
 
     def _capture():
         # Read stdout LINE BY LINE so progress is visible while the harness
@@ -406,8 +659,12 @@ def run_argv(argv, *, cwd, timeout=None, heartbeat_interval=15.0,
             for line in iter(stdout.readline, ""):
                 lines.append(line)
                 progress.feed(line)
+                if renderer is not None:
+                    _emit_live(renderer.feed(line))
         except (OSError, ValueError):
             pass
+        if renderer is not None:
+            _emit_live(renderer.flush())
         err_thread.join()
         try:
             proc.wait()
@@ -451,7 +708,10 @@ def run_argv(argv, *, cwd, timeout=None, heartbeat_interval=15.0,
         if cancel_seen and cancel_stage == 2 and now - cancel_started_at >= grace:
             cancel_stage = 3
             _signal_process_group(proc, signal.SIGKILL)
-        if now - last_hb >= heartbeat_interval:
+        # Silence is measured from whichever spoke last — the previous
+        # heartbeat or the last live fragment — so a streaming reply is
+        # never interrupted by one, and a quiet stretch still gets one.
+        if now - max(last_hb, live["last_output_at"]) >= heartbeat_interval:
             if on_event:
                 on_event(
                     "HEARTBEAT",
@@ -488,6 +748,8 @@ def run_argv(argv, *, cwd, timeout=None, heartbeat_interval=15.0,
         err = "harness invocation timed out"
     if status == CANCELLED and not err:
         err = "cancelled by Ctrl+C"
+    if live["failed"]:
+        err = f"{err}\n{live['failed']}" if err else live["failed"]
     return {
         "status": status,
         "output": captured.get("out", ""),

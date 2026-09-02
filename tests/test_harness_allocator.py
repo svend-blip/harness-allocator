@@ -19,6 +19,7 @@ Covers the corrected architecture:
 
 import hashlib
 import io
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -809,6 +810,76 @@ def test_terminal_prints_running_and_heartbeat_from_events():
     assert "DeepSeek Harness / DeepSeek V4 Pro" in out
     assert "pid: 7" in out
     assert "[HEARTBEAT] · ha-0 · 1.50s · alive" in out
+
+
+def _jsonl_stream():
+    """A finished simple-harness event stream, as a runner's raw output."""
+    tool_ok = json.dumps({"exit_code": 0, "stdout": "x", "stderr": "", "duration": "46ms"})
+    events = [
+        {"event": "started", "session_id": "s", "config": {"model": "m", "workspace": "/w", "permission": "P"}},
+        {"event": "model_request"},
+        {"event": "assistant_stream", "delta": "Reading "},
+        {"event": "assistant_stream", "delta": "the handoff.\n"},
+        {"event": "tool_call", "call_id": "c1", "tool": "shell"},
+        {"event": "tool_result", "call_id": "c1", "tool_result_status": "ok", "content": tool_ok},
+        {"event": "status", "status": "COMPLETED"},
+        {"event": "completed", "exit_code": 0},
+    ]
+    return "\n".join(json.dumps(e) for e in events) + "\n"
+
+
+_LIVE_PANE_LINES = [
+    "[started] session s model=m workspace=/w permission=P",
+    "Reading the handoff.",
+    "[tool] shell exit=0 (46ms)",
+    "[status] COMPLETED",
+    "[completed] exit=0",
+]
+
+
+def test_terminal_shows_live_output_in_order_and_closes_with_only_the_summary():
+    frames = [encode_request("ha-0", "task")]
+
+    def live_runner(**kwargs):
+        on_event = kwargs["on_event"]
+        on_event("RUNNING", {"pid": 7, "elapsed": 0.0, "process_alive": True})
+        for text in _LIVE_PANE_LINES:
+            on_event("OUTPUT", {"request_id": "ha-0", "pid": 7, "text": text})
+        return {"status": SUCCESS, "output": _jsonl_stream(), "error": "",
+                "elapsed": 0.5, "pid": 7, "request_id": "ha-0"}
+
+    reader = FrameReader(io.BytesIO(b"".join(frames)))
+    writer = io.StringIO()
+    run_terminal(role="probe", harness="dsh", model_target="deepseek-v4-pro",
+                 cwd=".", reader=reader, writer=writer, runner=live_runner)
+    out = writer.getvalue()
+    positions = [out.index(line) for line in _LIVE_PANE_LINES]
+    assert positions == sorted(positions), "live lines appear in the order they were emitted"
+    assert positions[-1] < out.index("[SUCCESS]"), "live lines precede the completion block"
+    for line in _LIVE_PANE_LINES:
+        assert out.count(line) == 1, f"{line!r} must not be rendered a second time at completion"
+    tail = out[out.index("[SUCCESS]"):]
+    assert "[turns] 1 model requests, 1 tool calls, 0 tool errors" in tail
+    assert tail.count("Status: READY") == 1
+
+
+def test_terminal_renders_the_whole_output_when_nothing_came_live():
+    frames = [encode_request("ha-0", "task")]
+
+    def silent_runner(**kwargs):
+        kwargs["on_event"]("RUNNING", {"pid": 7, "elapsed": 0.0, "process_alive": True})
+        return {"status": SUCCESS, "output": _jsonl_stream(), "error": "",
+                "elapsed": 0.5, "pid": 7, "request_id": "ha-0"}
+
+    reader = FrameReader(io.BytesIO(b"".join(frames)))
+    writer = io.StringIO()
+    run_terminal(role="probe", harness="dsh", model_target="deepseek-v4-pro",
+                 cwd=".", reader=reader, writer=writer, runner=silent_runner)
+    out = writer.getvalue()
+    tail = out[out.index("[SUCCESS]"):]
+    for line in _LIVE_PANE_LINES:
+        assert out.count(line) == 1 and line in tail, f"{line!r} is rendered once, after completion"
+    assert "[turns] 1 model requests, 1 tool calls, 0 tool errors" in tail
 
 
 # ── terminal surface ────────────────────────────────────────────────
