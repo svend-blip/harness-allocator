@@ -364,3 +364,26 @@ def test_failed_run_is_one_red_line_with_exit_and_last_status():
         "TOOL_DISPATCH_OVERFLOW: max-turns 30 exceeded\x1b[0m",
     ]
     assert "[status] FAILED" not in out
+
+
+# ── usage events (simple-harness 2844dd2) ──
+
+def test_usage_events_are_silent_and_totalled_on_the_tail():
+    import json
+    from harness_allocator.invoke import LiveRenderer, render_event
+    assert render_event({"event": "usage", "usage": {"completion_tokens": 5}}, {}) is None
+    r = LiveRenderer()
+    frags = []
+    for ev in [{"event": "model_request"},
+               {"event": "usage", "usage": {"prompt_tokens": 100, "completion_tokens": 1500, "reasoning_tokens": 1100}},
+               {"event": "assistant_stream", "delta": "done\n"},
+               {"event": "usage", "usage": {"completion_tokens": 600, "reasoning_tokens": 100}}]:
+        frags += r.feed(json.dumps(ev))
+    assert [f.text for f in frags] == ["done"]
+    assert r.tail() == "1 req / 0 calls / 0 err / 2.1k out (1.2k think)"
+
+
+def test_tail_without_usage_is_unchanged():
+    from harness_allocator.invoke import LiveRenderer
+    r = LiveRenderer()
+    assert r.tail() == "0 req / 0 calls / 0 err"

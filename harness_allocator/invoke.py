@@ -497,7 +497,9 @@ def render_event(event, names):
     (COMPLETED / FAILED / INTERRUPTED) are what the completion line says.
     """
     kind = event.get("event")
-    if kind in ("assistant_stream", "model_request", "tool_result", "completed"):
+    if kind in ("assistant_stream", "model_request", "tool_result", "completed", "usage"):
+        # ``usage`` (simple-harness 2844dd2): token counts per model request;
+        # totalled by LiveRenderer for the completion line, never a pane line.
         return None
     if kind == "tool_call":
         names[event.get("call_id")] = event.get("tool") or "?"
@@ -556,6 +558,8 @@ class LiveRenderer:
         self.requests = 0
         self.calls = 0
         self.errors = 0
+        self.out_tokens = 0
+        self.reasoning_tokens = 0
         self.exit_code = None
         self.last_status = None       # last status that was neither STREAMING nor terminal
 
@@ -577,6 +581,11 @@ class LiveRenderer:
     def feed_event(self, event):
         """Absorb one parsed event; return the fragments to print now."""
         kind = event.get("event")
+        if kind == "usage":
+            u = event.get("usage") or {}
+            self.out_tokens += int(u.get("completion_tokens", 0) or 0)
+            self.reasoning_tokens += int(u.get("reasoning_tokens", 0) or 0)
+            return []
         if kind == "assistant_stream":
             out = self._absorb(str(event.get("delta", "")))
             return self.flush_tools() + out if out else out
@@ -646,7 +655,10 @@ class LiveRenderer:
 
     def tail(self):
         """``11 req / 17 calls / 3 err`` — the counts as the completion line shows them."""
-        return f"{self.requests} req / {self.calls} calls / {self.errors} err"
+        base = f"{self.requests} req / {self.calls} calls / {self.errors} err"
+        if self.out_tokens:
+            base += f" / {_fmt_tokens(self.out_tokens)} out ({_fmt_tokens(self.reasoning_tokens)} think)"
+        return base
 
     def summary(self):
         return (f"[turns] {self.requests} model requests, {self.calls} tool calls, "
@@ -1146,3 +1158,8 @@ def execute_spec(spec, cfg=None, mode="READ_ONLY", workspace=None):
     finally:
         if lease is not None:
             _lease_release(lease)
+
+
+def _fmt_tokens(n):
+    """``7.1k`` above a thousand, the bare number below."""
+    return f"{n/1000:.1f}k" if n >= 1000 else str(n)
